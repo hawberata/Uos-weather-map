@@ -1,0 +1,2431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GIS Spatial Meteorological Bulletin — University of Sulaimani</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- html2canvas & jsPDF for Full Bulletin Poster Export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+    <!-- Google Fonts (Inter + Noto Naskh Arabic for Kurdish Sorani) -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Naskh+Arabic:wght@500;700;800&display=swap" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Inter', 'Noto Naskh Arabic', system-ui, sans-serif; background-color: #f1f5f9; }
+        .ku-font { font-family: 'Noto Naskh Arabic', 'Inter', sans-serif; }
+        
+        /* Strict Stacking Context Isolation so Leaflet panes never overlap the top toolbar */
+        .map-box {
+            height: 540px;
+            width: 100%;
+            position: relative;
+            overflow: hidden;
+            border: 2px solid #cbd5e1;
+            border-radius: 0.5rem;
+            background: #cbd5e1;
+            isolation: isolate;
+            z-index: 10;
+        }
+        .map-box-grid {
+            height: 390px;
+            width: 100%;
+            position: relative;
+            overflow: hidden;
+            border: 2px solid #cbd5e1;
+            border-radius: 0.5rem;
+            background: #cbd5e1;
+            isolation: isolate;
+            z-index: 10;
+        }
+        
+        /* GIS Legend Overlay Box (Contained inside isolated map-box) */
+        .gis-legend {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            z-index: 800;
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid #94a3b8;
+            border-radius: 4px;
+            padding: 8px 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+            font-family: 'Inter', sans-serif;
+            min-width: 138px;
+            pointer-events: auto;
+        }
+
+        /* In-Map Floating Label/Pin Switch Overlay (Top-Right of Each Map) */
+        .map-overlay-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 800;
+            display: flex;
+            gap: 5px;
+            pointer-events: auto;
+        }
+        .map-ctrl-btn {
+            background: rgba(255, 255, 255, 0.94);
+            border: 1px solid #64748b;
+            border-radius: 6px;
+            padding: 3px 8px;
+            font-size: 10.5px;
+            font-weight: 800;
+            color: #0f172a;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: all 0.15s;
+        }
+        .map-ctrl-btn:hover { background: #f8fafc; }
+        .map-ctrl-btn.active {
+            background: #1e3a8a;
+            color: #ffffff;
+            border-color: #1e40af;
+        }
+
+        /* Station Callout Label on Map */
+        .station-map-label {
+            background: rgba(255, 255, 255, 0.92);
+            border: 1px solid #334155;
+            border-radius: 4px;
+            padding: 1px 5px;
+            font-size: 11px;
+            font-weight: 800;
+            color: #0f172a;
+            white-space: nowrap;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+            margin-bottom: 2px;
+        }
+        ::-webkit-scrollbar { width: 7px; height: 7px; }
+        ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 4px; }
+    </style>
+</head>
+<body class="text-slate-900 min-h-screen flex flex-col">
+
+    <!-- =================================================================== -->
+    <!-- FLOATING RESTORE BUTTON (VISIBLE WHEN TOP RIBBON IS HIDDEN)         -->
+    <!-- =================================================================== -->
+    <div id="floatingRestoreBar" class="fixed top-3 right-4 z-[2500] hidden flex items-center gap-2">
+        <button onclick="toggleRibbonCollapse(false)" class="px-3.5 py-2 rounded-full bg-slate-900/95 hover:bg-blue-700 text-white text-xs font-extrabold shadow-2xl border border-slate-600 flex items-center gap-2 transition">
+            <i class="fa-solid fa-sliders text-amber-400"></i> Show Controls & Selection Bar
+        </button>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- TOP CONTROL TOOLBAR (Z-INDEX 2000 + PIN/UNPIN + HIDE/SHOW)          -->
+    <!-- =================================================================== -->
+    <section id="controlToolbar" class="bg-slate-900 text-white border-b border-slate-700 px-4 py-2.5 sticky top-0 z-[2000] shadow-xl transition-all duration-200">
+        <div class="max-w-[1600px] mx-auto space-y-2.5">
+            
+            <!-- Row 1: App Title, Language, Layout Mode, Export Buttons, Pin & Hide Controls -->
+            <div class="flex flex-wrap justify-between items-center gap-2">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center font-extrabold text-base shadow">
+                        <i class="fa-solid fa-map-location-dot"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-sm md:text-base font-extrabold tracking-tight flex items-center gap-2">
+                            UOS Spatial Iso-Map & Meteorological Bulletin Generator
+                            <span class="px-2 py-0.5 text-[10px] bg-amber-500/20 text-amber-300 border border-amber-400/30 rounded-full font-bold">IDW GIS Engine</span>
+                        </h1>
+                        <p class="text-[11px] text-slate-400">Dept. of Earth Sciences & Petroleum • University of Sulaimani • Developed by Hawber Ata</p>
+                    </div>
+                </div>
+
+                <!-- Right Action Buttons -->
+                <div class="flex flex-wrap items-center gap-1.5">
+                    <!-- Language Switcher (Kurdish / English) -->
+                    <div class="flex bg-slate-800 p-0.5 rounded-lg border border-slate-700">
+                        <button onclick="setLanguage('ku')" id="lang-ku" class="px-2.5 py-1 rounded text-xs font-bold bg-blue-600 text-white transition">کوردی</button>
+                        <button onclick="setLanguage('en')" id="lang-en" class="px-2.5 py-1 rounded text-xs font-bold text-slate-300 hover:text-white transition">EN</button>
+                    </div>
+
+                    <!-- Layout Mode Switcher -->
+                    <select id="layoutModeSelect" onchange="onLayoutModeChange()" class="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-bold text-white cursor-pointer">
+                        <option value="dual" selected>🗺️ Dual Map (Side-by-Side)</option>
+                        <option value="single">🔍 Single Large Map</option>
+                        <option value="quad">🎛️ 4-Map Grid (4 Configurable Maps)</option>
+                    </select>
+
+                    <!-- Station Manager & 200km Radar Modal Button -->
+                    <button onclick="toggleStationManager()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 border border-indigo-400/50 rounded-lg text-xs font-extrabold text-white flex items-center gap-1.5 shadow transition">
+                        <i class="fa-solid fa-satellite-dish text-amber-300 animate-pulse"></i> Stations & 200km Radar
+                    </button>
+
+                    <!-- Export Poster PNG & PDF -->
+                    <button onclick="exportBulletinPoster('png')" class="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow flex items-center gap-1 transition">
+                        <i class="fa-solid fa-image"></i> PNG
+                    </button>
+                    <button onclick="exportBulletinPoster('pdf')" class="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold shadow flex items-center gap-1 transition">
+                        <i class="fa-solid fa-file-pdf"></i> PDF
+                    </button>
+
+                    <!-- PIN / UNPIN RIBBON BUTTON -->
+                    <button onclick="togglePinRibbon()" id="pinRibbonBtn" class="px-2.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition" title="Pin or Unpin Top Ribbon when scrolling">
+                        <i id="pinRibbonIcon" class="fa-solid fa-thumbtack"></i>
+                        <span id="pinRibbonText">Pinned</span>
+                    </button>
+
+                    <!-- HIDE / COLLAPSE CONTROLS DRAWER BUTTON -->
+                    <button onclick="toggleRibbonCollapse(true)" class="px-2.5 py-1.5 bg-slate-800 hover:bg-rose-600/80 text-slate-200 hover:text-white border border-slate-600 rounded-lg text-xs font-bold flex items-center gap-1 transition" title="Hide Selection Interface for Clear Dashboard View">
+                        <i class="fa-solid fa-chevron-up"></i> Hide Bar
+                    </button>
+                </div>
+            </div>
+
+            <!-- Collapsible Selection Controls Body -->
+            <div id="ribbonControlsBody" class="space-y-2.5">
+                <!-- Row 2: Date Range, Parameter Selectors, IDW Interpolation Settings -->
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-3 pt-2 border-t border-slate-800 items-end">
+                    
+                    <!-- Date Range & Quick Presets -->
+                    <div class="lg:col-span-4 flex flex-wrap items-end gap-2">
+                        <div>
+                            <label class="block text-[10px] uppercase font-bold text-slate-400 mb-0.5">Start Date</label>
+                            <input type="date" id="startDate" class="bg-slate-800 border border-slate-700 rounded px-2.5 py-1 text-xs font-semibold text-white">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] uppercase font-bold text-slate-400 mb-0.5">End Date</label>
+                            <input type="date" id="endDate" class="bg-slate-800 border border-slate-700 rounded px-2.5 py-1 text-xs font-semibold text-white">
+                        </div>
+                        <div class="flex gap-1">
+                            <button onclick="setQuickRange(0)" class="px-2 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 font-semibold" title="Today">24h</button>
+                            <button onclick="setQuickRange(6)" class="px-2 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 font-semibold" title="Last 7 Days">7d</button>
+                            <button onclick="setQuickRange(30)" class="px-2 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 font-semibold" title="Last 30 Days">30d</button>
+                        </div>
+                        <button onclick="fetchAndRenderMaps()" class="px-3.5 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-extrabold rounded shadow flex items-center gap-1.5">
+                            <i class="fa-solid fa-bolt"></i> Fetch & Plot
+                        </button>
+                    </div>
+
+                    <!-- Map 1 & Map 2 Parameter Selectors -->
+                    <div class="lg:col-span-4 grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-[10px] uppercase font-bold text-cyan-400 mb-0.5">Map 1 Parameter (Left)</label>
+                            <select id="map1Param" onchange="renderAllActiveMaps()" class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs font-bold text-white">
+                                <option value="tempMin" selected>❄️ Minimum Temperature (°C)</option>
+                                <option value="tempMax">🔥 Maximum Temperature (°C)</option>
+                                <option value="tempAvg">🌡️ Average Temperature (°C)</option>
+                                <option value="precipTotal">🌧️ Total Precipitation (mm)</option>
+                                <option value="precipRateMax">⛈️ Max Precip Rate (mm/hr)</option>
+                                <option value="humAvg">💦 Mean Humidity (%)</option>
+                                <option value="humMax">💧 Maximum Humidity (%)</option>
+                                <option value="dewAvg">🌫️ Mean Dew Point (°C)</option>
+                                <option value="windMaxGust">💨 Max Wind Gust (km/h)</option>
+                                <option value="windAvg">🌬️ Mean Wind Speed (km/h)</option>
+                                <option value="pressAvg">⏲️ Mean Pressure (hPa)</option>
+                                <option value="uvMax">☀️ Max UV Index</option>
+                                <option value="solarMax">🔆 Peak Solar Radiation (W/m²)</option>
+                            </select>
+                        </div>
+                        <div id="map2SelectorBox">
+                            <label class="block text-[10px] uppercase font-bold text-rose-400 mb-0.5">Map 2 Parameter (Right)</label>
+                            <select id="map2Param" onchange="renderAllActiveMaps()" class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs font-bold text-white">
+                                <option value="tempMax" selected>🔥 Maximum Temperature (°C)</option>
+                                <option value="tempMin">❄️ Minimum Temperature (°C)</option>
+                                <option value="tempAvg">🌡️ Average Temperature (°C)</option>
+                                <option value="precipTotal">🌧️ Total Precipitation (mm)</option>
+                                <option value="precipRateMax">⛈️ Max Precip Rate (mm/hr)</option>
+                                <option value="humAvg">💦 Mean Humidity (%)</option>
+                                <option value="humMax">💧 Maximum Humidity (%)</option>
+                                <option value="dewAvg">🌫️ Mean Dew Point (°C)</option>
+                                <option value="windMaxGust">💨 Max Wind Gust (km/h)</option>
+                                <option value="windAvg">🌬️ Mean Wind Speed (km/h)</option>
+                                <option value="pressAvg">⏲️ Mean Pressure (hPa)</option>
+                                <option value="uvMax">☀️ Max UV Index</option>
+                                <option value="solarMax">🔆 Peak Solar Radiation (W/m²)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- GIS Interpolation & Basemap Tile Controls -->
+                    <div class="lg:col-span-4 grid grid-cols-4 gap-2">
+                        <div>
+                            <label class="block text-[10px] uppercase font-bold text-slate-400 mb-0.5">Surface Clipping</label>
+                            <select id="clipModeSelect" onchange="renderAllActiveMaps()" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-[11px] font-bold text-white">
+                                <option value="buffer" selected>Buffered Region</option>
+                                <option value="hull">Convex Hull</option>
+                                <option value="full">Full Map Box</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] uppercase font-bold text-slate-400 mb-0.5">IDW Power (p)</label>
+                            <select id="idwPowerSelect" onchange="renderAllActiveMaps()" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-[11px] font-bold text-white">
+                                <option value="1.8">1.8 (Smooth)</option>
+                                <option value="2.3" selected>2.3 (Balanced)</option>
+                                <option value="3.2">3.2 (Bullseye)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] uppercase font-bold text-slate-400 mb-0.5">Opacity</label>
+                            <select id="idwOpacitySelect" onchange="renderAllActiveMaps()" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-[11px] font-bold text-white">
+                                <option value="0.65">65%</option>
+                                <option value="0.78" selected>78% (Default)</option>
+                                <option value="0.90">90%</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] uppercase font-bold text-amber-400 mb-0.5">Map Tile Layer</label>
+                            <select id="basemapSelect" onchange="changeBasemap()" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-[11px] font-bold text-white cursor-pointer">
+                                <option value="topo" selected>🗺️ Topographic</option>
+                                <option value="relief">⛰️ Shaded Relief</option>
+                                <option value="sat">🛰️ Satellite Imagery</option>
+                                <option value="osm">🛣️ OpenStreetMap</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Row 3: Multi-Station Selector Checklist Bar + Global Label/Pin Switch -->
+                <div class="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="text-xs font-extrabold uppercase tracking-wider text-amber-400 flex items-center gap-1">
+                            <i class="fa-solid fa-square-check"></i> Stations:
+                        </span>
+                        <button onclick="toggleAllStations(true)" class="px-2 py-0.5 text-[11px] bg-blue-600/30 hover:bg-blue-600/50 text-blue-200 border border-blue-500/40 rounded font-bold">Select All</button>
+                        <button onclick="toggleAllStations(false)" class="px-2 py-0.5 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded font-bold">Clear</button>
+                        <button onclick="fitMapsToSelectedStations()" class="px-2 py-0.5 text-[11px] bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-200 border border-emerald-500/40 rounded font-bold">
+                            <i class="fa-solid fa-compress mr-1"></i> Fit Zoom
+                        </button>
+                        <!-- Global Label & Point Toggle Buttons -->
+                        <button onclick="toggleGlobalStationLabels()" id="globalLabelToggleBtn" class="px-2.5 py-0.5 text-[11px] bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-400 rounded font-extrabold flex items-center gap-1 transition" title="Switch Station Name Labels ON or OFF across all maps">
+                            <i class="fa-solid fa-tag"></i> <span id="globalLabelToggleTxt">Labels: ON (Name + Val)</span>
+                        </button>
+                        <button onclick="toggleGlobalStationPins()" id="globalPinToggleBtn" class="px-2.5 py-0.5 text-[11px] bg-slate-700 hover:bg-slate-600 text-white border border-slate-500 rounded font-extrabold flex items-center gap-1 transition" title="Switch Graduated Black Point Pins ON or OFF across all maps">
+                            <i class="fa-solid fa-location-dot"></i> <span id="globalPinToggleTxt">Points: ON</span>
+                        </button>
+                        <div id="stationChecklistBar" class="flex flex-wrap items-center gap-1.5 ml-1"></div>
+                    </div>
+
+                    <div id="fetchStatusText" class="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Ready
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- PRINTABLE / EXPORTABLE METEOROLOGICAL BULLETIN CANVAS               -->
+    <!-- =================================================================== -->
+    <main class="flex-1 p-3 md:p-5 overflow-x-auto relative z-10">
+        <div id="bulletinExportArea" class="max-w-[1560px] mx-auto bg-white rounded-xl shadow-xl border border-slate-300 overflow-hidden">
+
+            <!-- TOP BANNER HEADER (MATCHES SCREENSHOT HEADER STYLE) -->
+            <div class="bg-gradient-to-r from-sky-700 via-blue-800 to-indigo-900 text-white px-6 py-4 border-b-4 border-amber-500 relative">
+                <div class="grid grid-cols-1 md:grid-cols-12 items-center gap-4">
+                    
+                    <!-- Left Weather Icon Graphic -->
+                    <div class="md:col-span-3 flex items-center gap-3">
+                        <div class="w-16 h-16 rounded-2xl bg-white/15 backdrop-blur flex items-center justify-center border border-white/25 shadow-inner">
+                            <i class="fa-solid fa-cloud-sun-rain text-amber-300 text-4xl"></i>
+                        </div>
+                        <div>
+                            <div id="hdrSubLeft" class="text-xs font-bold text-amber-300 uppercase tracking-wider ku-font">بەڕێوەبەرایەتی کەشناسی زانکۆ</div>
+                            <div id="hdrDeptLeft" class="text-sm font-extrabold text-white">University of Sulaimani</div>
+                            <div class="text-[11px] text-sky-200">Dept. of Earth Sciences & Petroleum</div>
+                        </div>
+                    </div>
+
+                    <!-- Center Official Titles -->
+                    <div class="md:col-span-6 text-center space-y-0.5 ku-font">
+                        <div id="hdrLine1" class="text-base md:text-lg font-extrabold text-white tracking-wide">زانکۆی سلێمانی • کۆلێژی زانست</div>
+                        <div id="hdrLine2" class="text-sm md:text-base font-bold text-sky-100">بەشی زانستەکانی زەوی و نەوت — سەنتەری کەشناسی</div>
+                        <div id="hdrLine3" class="text-xs md:text-sm font-extrabold text-amber-300 pt-0.5">بڵاوکراوەی نەخشەی کەشناسی و شیکاری فەزایی (GIS Spatial Bulletin)</div>
+                        <div id="hdrDateRangeBanner" class="inline-block mt-1 px-3 py-0.5 rounded-full bg-slate-900/45 border border-white/20 text-xs font-mono text-white">
+                            Period: -- to --
+                        </div>
+                    </div>
+
+                    <!-- Right University Emblem & Credits -->
+                    <div class="md:col-span-3 flex items-center justify-end gap-3">
+                        <div class="text-right">
+                            <div class="text-xs font-extrabold text-amber-300">UOS • METEO CENTER</div>
+                            <div id="hdrStationCountBadge" class="text-xs font-bold text-white">4 Active Stations</div>
+                            <div class="text-[11px] text-sky-200">Developed by Hawber Ata</div>
+                        </div>
+                        <div class="w-16 h-16 rounded-full bg-white p-1 border-2 border-amber-400 shadow-md flex items-center justify-center flex-shrink-0">
+                            <img src="NEW%20DEPT%20LOGO%20soft%20copy2.png" alt="UOS Logo" class="w-full h-full object-contain rounded-full" onerror="this.style.display='none'; document.getElementById('fallbackCrest').style.display='flex';">
+                            <div id="fallbackCrest" style="display:none;" class="w-full h-full rounded-full bg-slate-900 text-amber-400 flex items-center justify-center font-extrabold text-xs text-center leading-tight">
+                                UOS<br>EARTH
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MAIN BODY: LEFT EXTREMES SIDEBAR + RIGHT SPATIAL MAPS -->
+            <div class="p-4 md:p-5 grid grid-cols-1 lg:grid-cols-12 gap-5 bg-slate-50">
+
+                <!-- ========================================================= -->
+                <!-- LEFT COLUMN: CLIMATIC EXTREMES SIDEBAR (LIKE SCREENSHOT)  -->
+                <!-- ========================================================= -->
+                <div class="lg:col-span-3 flex flex-col justify-between space-y-3">
+                    
+                    <!-- Purple Header Pill -->
+                    <div id="sidebarHeaderTitle" class="bg-purple-800 text-white font-extrabold text-sm md:text-base text-center py-2.5 px-4 rounded-lg shadow ku-font">
+                        ڕەگەزەکانى ئاووهەوا
+                    </div>
+
+                    <!-- Card 1: Highest Recorded Temperature -->
+                    <div class="bg-white border-2 border-slate-200 rounded-2xl p-3.5 shadow-sm flex items-center justify-between gap-2">
+                        <div class="w-12 h-12 rounded-xl bg-red-600 text-white flex items-center justify-center text-2xl shadow flex-shrink-0">
+                            <i class="fa-solid fa-sun"></i>
+                        </div>
+                        <div class="flex-1 text-right ku-font">
+                            <div id="lblExtHighTemp" class="text-xs font-extrabold text-red-700">بەرزترین پلەی گەرمی تۆمارکراو</div>
+                            <div class="flex items-baseline justify-between mt-1.5 pt-1 border-t border-slate-100">
+                                <span id="extHighTempVal" class="text-lg font-extrabold text-red-600 font-sans">-- °C</span>
+                                <span id="extHighTempSt" class="text-xs font-bold text-slate-700">--</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Card 2: Lowest Recorded Temperature -->
+                    <div class="bg-white border-2 border-slate-200 rounded-2xl p-3.5 shadow-sm flex items-center justify-between gap-2">
+                        <div class="w-12 h-12 rounded-xl bg-sky-600 text-white flex items-center justify-center text-2xl shadow flex-shrink-0">
+                            <i class="fa-regular fa-snowflake"></i>
+                        </div>
+                        <div class="flex-1 text-right ku-font">
+                            <div id="lblExtLowTemp" class="text-xs font-extrabold text-sky-700">نزمترین پلەی گەرمی تۆمارکراو</div>
+                            <div class="flex items-baseline justify-between mt-1.5 pt-1 border-t border-slate-100">
+                                <span id="extLowTempVal" class="text-lg font-extrabold text-sky-700 font-sans">-- °C</span>
+                                <span id="extLowTempSt" class="text-xs font-bold text-slate-700">--</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Card 3: Highest Wind Speed / Gust -->
+                    <div class="bg-white border-2 border-slate-200 rounded-2xl p-3.5 shadow-sm flex items-center justify-between gap-2">
+                        <div class="w-12 h-12 rounded-xl bg-emerald-600 text-white flex items-center justify-center text-2xl shadow flex-shrink-0">
+                            <i class="fa-solid fa-wind"></i>
+                        </div>
+                        <div class="flex-1 text-right ku-font">
+                            <div id="lblExtHighWind" class="text-xs font-extrabold text-emerald-700">بەرزترین خێرایی با</div>
+                            <div class="flex items-baseline justify-between mt-1.5 pt-1 border-t border-slate-100">
+                                <span id="extHighWindVal" class="text-lg font-extrabold text-emerald-700 font-sans">-- km/h</span>
+                                <span id="extHighWindSt" class="text-xs font-bold text-slate-700">--</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Card 4: Highest Relative Humidity -->
+                    <div class="bg-white border-2 border-slate-200 rounded-2xl p-3.5 shadow-sm flex items-center justify-between gap-2">
+                        <div class="w-12 h-12 rounded-xl bg-purple-700 text-white flex items-center justify-center text-2xl shadow flex-shrink-0">
+                            <i class="fa-solid fa-droplet"></i>
+                        </div>
+                        <div class="flex-1 text-right ku-font">
+                            <div id="lblExtHighHum" class="text-xs font-extrabold text-purple-800">بەرزترین ڕێژەی شێداری هەوا</div>
+                            <div id="extHighHumList" class="mt-1.5 pt-1 border-t border-slate-100 space-y-0.5 text-xs font-bold text-slate-700">
+                                <div class="flex justify-between"><span class="font-sans text-purple-700 font-extrabold">--%</span><span>--</span></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Card 5: Highest Precipitation + Areal Mean -->
+                    <div class="bg-white border-2 border-slate-200 rounded-2xl p-3.5 shadow-sm flex items-center justify-between gap-2">
+                        <div class="w-12 h-12 rounded-xl bg-cyan-500 text-white flex items-center justify-center text-2xl shadow flex-shrink-0">
+                            <i class="fa-solid fa-cloud-showers-heavy"></i>
+                        </div>
+                        <div class="flex-1 text-right ku-font">
+                            <div id="lblExtHighRain" class="text-xs font-extrabold text-cyan-700">بەرزترین ڕێژەی باران بارین</div>
+                            <div class="flex items-baseline justify-between mt-1.5 pt-1 border-t border-slate-100">
+                                <span id="extHighRainVal" class="text-lg font-extrabold text-cyan-600 font-sans">-- mm</span>
+                                <span id="extHighRainSt" class="text-xs font-bold text-slate-700">--</span>
+                            </div>
+                            <div class="flex items-baseline justify-between mt-1 text-[11px] text-slate-500 font-sans">
+                                <span id="extArealRainVal" class="font-bold text-blue-600">Areal Mean: -- mm</span>
+                                <span id="extActiveStCount">(-- Stns)</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ========================================================= -->
+                <!-- RIGHT COLUMN: SPATIAL INTERPOLATION MAPS                  -->
+                <!-- ========================================================= -->
+                <div class="lg:col-span-9">
+                    
+                    <!-- DUAL OR SINGLE MAP CONTAINER -->
+                    <div id="dualMapContainer" class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        
+                        <!-- MAP 1 PANEL -->
+                        <div id="map1Wrapper" class="flex flex-col space-y-2">
+                            <div id="map1HeaderBanner" class="bg-sky-700 text-white font-extrabold text-sm md:text-base text-center py-2 px-4 rounded-lg shadow ku-font">
+                                نەخشەی نزمترین پلەی گەرمی تۆمارکراو
+                            </div>
+                            <div id="map1Canvas" class="map-box shadow-inner">
+                                <!-- In-Map Label & Pin Toggle Bar -->
+                                <div class="map-overlay-controls">
+                                    <button type="button" onclick="toggleMapLabelState('map1')" id="lblBtn-map1" class="map-ctrl-btn active" title="Switch Station Labels ON/OFF inside this map">
+                                        <i class="fa-solid fa-tag"></i> <span>Labels: ON</span>
+                                    </button>
+                                    <button type="button" onclick="toggleMapPinState('map1')" id="pinBtn-map1" class="map-ctrl-btn active" title="Switch Graduated Black Point Symbols ON/OFF inside this map">
+                                        <i class="fa-solid fa-location-dot"></i> <span>Points: ON</span>
+                                    </button>
+                                </div>
+                                <div id="legend-map1" class="gis-legend"></div>
+                            </div>
+                        </div>
+
+                        <!-- MAP 2 PANEL -->
+                        <div id="map2Wrapper" class="flex flex-col space-y-2">
+                            <div id="map2HeaderBanner" class="bg-red-700 text-white font-extrabold text-sm md:text-base text-center py-2 px-4 rounded-lg shadow ku-font">
+                                نەخشەی بەرزترین پلەی گەرمی تۆمارکراو
+                            </div>
+                            <div id="map2Canvas" class="map-box shadow-inner">
+                                <!-- In-Map Label & Pin Toggle Bar -->
+                                <div class="map-overlay-controls">
+                                    <button type="button" onclick="toggleMapLabelState('map2')" id="lblBtn-map2" class="map-ctrl-btn active" title="Switch Station Labels ON/OFF inside this map">
+                                        <i class="fa-solid fa-tag"></i> <span>Labels: ON</span>
+                                    </button>
+                                    <button type="button" onclick="toggleMapPinState('map2')" id="pinBtn-map2" class="map-ctrl-btn active" title="Switch Graduated Black Point Symbols ON/OFF inside this map">
+                                        <i class="fa-solid fa-location-dot"></i> <span>Points: ON</span>
+                                    </button>
+                                </div>
+                                <div id="legend-map2" class="gis-legend"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 4-MAP QUAD GRID CONTAINER (EACH MAP HAS ITS OWN PARAMETER SELECTOR & IN-MAP LABEL TOGGLE) -->
+                    <div id="quadMapContainer" class="hidden grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="flex flex-col space-y-1.5">
+                            <div class="flex items-center justify-between gap-2 bg-sky-800 text-white px-3 py-1.5 rounded">
+                                <span id="q1Banner" class="font-extrabold text-xs ku-font truncate">Minimum Temperature (°C)</span>
+                                <select id="q1ParamSelect" onchange="renderAllActiveMaps()" class="bg-slate-900/60 border border-white/20 rounded px-2 py-0.5 text-[11px] font-bold text-white">
+                                    <option value="tempMin" selected>Min Temp (°C)</option>
+                                    <option value="tempMax">Max Temp (°C)</option>
+                                    <option value="tempAvg">Avg Temp (°C)</option>
+                                    <option value="precipTotal">Precipitation (mm)</option>
+                                    <option value="humAvg">Humidity (%)</option>
+                                    <option value="dewAvg">Dew Point (°C)</option>
+                                    <option value="windMaxGust">Wind Gust (km/h)</option>
+                                    <option value="pressAvg">Pressure (hPa)</option>
+                                    <option value="uvMax">UV Index</option>
+                                </select>
+                            </div>
+                            <div id="mapQ1Canvas" class="map-box-grid">
+                                <div class="map-overlay-controls">
+                                    <button type="button" onclick="toggleMapLabelState('mapQ1')" id="lblBtn-mapQ1" class="map-ctrl-btn active"><i class="fa-solid fa-tag"></i> <span>Labels: ON</span></button>
+                                    <button type="button" onclick="toggleMapPinState('mapQ1')" id="pinBtn-mapQ1" class="map-ctrl-btn active"><i class="fa-solid fa-location-dot"></i> <span>Points: ON</span></button>
+                                </div>
+                                <div id="legend-mapQ1" class="gis-legend"></div>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col space-y-1.5">
+                            <div class="flex items-center justify-between gap-2 bg-red-800 text-white px-3 py-1.5 rounded">
+                                <span id="q2Banner" class="font-extrabold text-xs ku-font truncate">Maximum Temperature (°C)</span>
+                                <select id="q2ParamSelect" onchange="renderAllActiveMaps()" class="bg-slate-900/60 border border-white/20 rounded px-2 py-0.5 text-[11px] font-bold text-white">
+                                    <option value="tempMin">Min Temp (°C)</option>
+                                    <option value="tempMax" selected>Max Temp (°C)</option>
+                                    <option value="tempAvg">Avg Temp (°C)</option>
+                                    <option value="precipTotal">Precipitation (mm)</option>
+                                    <option value="humAvg">Humidity (%)</option>
+                                    <option value="dewAvg">Dew Point (°C)</option>
+                                    <option value="windMaxGust">Wind Gust (km/h)</option>
+                                    <option value="pressAvg">Pressure (hPa)</option>
+                                    <option value="uvMax">UV Index</option>
+                                </select>
+                            </div>
+                            <div id="mapQ2Canvas" class="map-box-grid">
+                                <div class="map-overlay-controls">
+                                    <button type="button" onclick="toggleMapLabelState('mapQ2')" id="lblBtn-mapQ2" class="map-ctrl-btn active"><i class="fa-solid fa-tag"></i> <span>Labels: ON</span></button>
+                                    <button type="button" onclick="toggleMapPinState('mapQ2')" id="pinBtn-mapQ2" class="map-ctrl-btn active"><i class="fa-solid fa-location-dot"></i> <span>Points: ON</span></button>
+                                </div>
+                                <div id="legend-mapQ2" class="gis-legend"></div>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col space-y-1.5">
+                            <div class="flex items-center justify-between gap-2 bg-blue-800 text-white px-3 py-1.5 rounded">
+                                <span id="q3Banner" class="font-extrabold text-xs ku-font truncate">Total Precipitation (mm)</span>
+                                <select id="q3ParamSelect" onchange="renderAllActiveMaps()" class="bg-slate-900/60 border border-white/20 rounded px-2 py-0.5 text-[11px] font-bold text-white">
+                                    <option value="tempMin">Min Temp (°C)</option>
+                                    <option value="tempMax">Max Temp (°C)</option>
+                                    <option value="tempAvg">Avg Temp (°C)</option>
+                                    <option value="precipTotal" selected>Precipitation (mm)</option>
+                                    <option value="humAvg">Humidity (%)</option>
+                                    <option value="dewAvg">Dew Point (°C)</option>
+                                    <option value="windMaxGust">Wind Gust (km/h)</option>
+                                    <option value="pressAvg">Pressure (hPa)</option>
+                                    <option value="uvMax">UV Index</option>
+                                </select>
+                            </div>
+                            <div id="mapQ3Canvas" class="map-box-grid">
+                                <div class="map-overlay-controls">
+                                    <button type="button" onclick="toggleMapLabelState('mapQ3')" id="lblBtn-mapQ3" class="map-ctrl-btn active"><i class="fa-solid fa-tag"></i> <span>Labels: ON</span></button>
+                                    <button type="button" onclick="toggleMapPinState('mapQ3')" id="pinBtn-mapQ3" class="map-ctrl-btn active"><i class="fa-solid fa-location-dot"></i> <span>Points: ON</span></button>
+                                </div>
+                                <div id="legend-mapQ3" class="gis-legend"></div>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col space-y-1.5">
+                            <div class="flex items-center justify-between gap-2 bg-emerald-800 text-white px-3 py-1.5 rounded">
+                                <span id="q4Banner" class="font-extrabold text-xs ku-font truncate">Maximum Wind Gust (km/h)</span>
+                                <select id="q4ParamSelect" onchange="renderAllActiveMaps()" class="bg-slate-900/60 border border-white/20 rounded px-2 py-0.5 text-[11px] font-bold text-white">
+                                    <option value="tempMin">Min Temp (°C)</option>
+                                    <option value="tempMax">Max Temp (°C)</option>
+                                    <option value="tempAvg">Avg Temp (°C)</option>
+                                    <option value="precipTotal">Precipitation (mm)</option>
+                                    <option value="humAvg">Humidity (%)</option>
+                                    <option value="dewAvg">Dew Point (°C)</option>
+                                    <option value="windMaxGust" selected>Wind Gust (km/h)</option>
+                                    <option value="pressAvg">Pressure (hPa)</option>
+                                    <option value="uvMax">UV Index</option>
+                                </select>
+                            </div>
+                            <div id="mapQ4Canvas" class="map-box-grid">
+                                <div class="map-overlay-controls">
+                                    <button type="button" onclick="toggleMapLabelState('mapQ4')" id="lblBtn-mapQ4" class="map-ctrl-btn active"><i class="fa-solid fa-tag"></i> <span>Labels: ON</span></button>
+                                    <button type="button" onclick="toggleMapPinState('mapQ4')" id="pinBtn-mapQ4" class="map-ctrl-btn active"><i class="fa-solid fa-location-dot"></i> <span>Points: ON</span></button>
+                                </div>
+                                <div id="legend-mapQ4" class="gis-legend"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- BOTTOM STATION SUMMARY TABLE (INSIDE BULLETIN) -->
+            <div class="px-5 pb-4 pt-1 bg-slate-50 border-t border-slate-200">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-xs font-extrabold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                        <i class="fa-solid fa-table text-blue-600"></i> Selected Stations Spatial Data Summary Table
+                    </h3>
+                    <span id="tableArealSummaryText" class="text-xs font-bold text-blue-700">Areal Mean Precipitation: -- mm</span>
+                </div>
+                <div class="overflow-x-auto rounded-lg border border-slate-300 bg-white">
+                    <table class="w-full text-left border-collapse text-xs">
+                        <thead class="bg-slate-800 text-white">
+                            <tr>
+                                <th class="p-2">Station Name</th>
+                                <th class="p-2">Kurdish Name</th>
+                                <th class="p-2">WU ID</th>
+                                <th class="p-2">Coordinates</th>
+                                <th class="p-2 text-cyan-300">Min Temp (°C)</th>
+                                <th class="p-2">Avg Temp (°C)</th>
+                                <th class="p-2 text-rose-300">Max Temp (°C)</th>
+                                <th class="p-2 text-sky-300">Precip Total (mm)</th>
+                                <th class="p-2">Humidity Avg / Max (%)</th>
+                                <th class="p-2 text-emerald-300">Wind Avg / Max Gust (km/h)</th>
+                                <th class="p-2">Pressure (hPa)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stationSummaryTableBody" class="divide-y divide-slate-200"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- =================================================================== -->
+    <!-- MODAL: MANAGE STATIONS, 200KM RADAR DISCOVERY & API KEY             -->
+    <!-- =================================================================== -->
+    <div id="stationModal" class="fixed inset-0 bg-black/65 backdrop-blur-sm z-[3000] hidden flex items-center justify-center p-4">
+        <div class="bg-white border border-slate-300 rounded-2xl max-w-6xl w-full p-6 shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
+            <div class="flex justify-between items-center border-b border-slate-200 pb-3">
+                <div>
+                    <h3 class="text-base font-extrabold flex items-center gap-2 text-slate-900">
+                        <i class="fa-solid fa-satellite-dish text-indigo-600"></i> Station Network Manager & 200 km Live Station Discovery
+                    </h3>
+                    <p class="text-xs text-slate-500 mt-0.5">Queries each station's live PWS metadata to retrieve its exact registered station name, coordinates, elevation, and live weather readings.</p>
+                </div>
+                <button onclick="toggleStationManager()" class="text-slate-400 hover:text-rose-600 text-lg"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <!-- 1. 200 KM SURROUNDING AREA STATION RADAR SCANNER -->
+            <div class="p-4 rounded-xl bg-indigo-50/80 border-2 border-indigo-200 space-y-3">
+                <div class="flex flex-wrap justify-between items-center gap-2">
+                    <div>
+                        <h4 class="text-xs font-extrabold uppercase tracking-wider text-indigo-900 flex items-center gap-1.5">
+                            <i class="fa-solid fa-compass text-indigo-600"></i> Discover Weather Underground Stations Around Sulaimani (With Exact PWS Name & Live Telemetry)
+                        </h4>
+                        <p id="discoveryStatusText" class="text-[11px] text-slate-600 mt-0.5">
+                            Click "Scan Live WU API" to discover stations and verify their exact registered PWS name, coordinates, elevation, and current telemetry.
+                        </p>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <select id="radarRadiusSelect" class="bg-white border border-indigo-300 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-800">
+                            <option value="50">Within 50 km</option>
+                            <option value="120">Within 120 km</option>
+                            <option value="200" selected>Within 200 km (Region)</option>
+                            <option value="350">Within 350 km (All KRI & Border)</option>
+                        </select>
+                        <button onclick="scanNearbyWuStations()" id="scanWuBtn" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold rounded-lg shadow flex items-center gap-1.5 transition">
+                            <i class="fa-solid fa-satellite-dish"></i> Scan Live WU API
+                        </button>
+                        <button onclick="addAllDiscoveredStations()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg shadow flex items-center gap-1 transition">
+                            <i class="fa-solid fa-layer-group"></i> + Add All Found
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Discovered Stations Table (Exact PWS Name, District, Coordinates, Elev, Distance, Live Telemetry & +Add Button) -->
+                <div class="overflow-x-auto max-h-64 border border-indigo-200 rounded-lg bg-white">
+                    <table class="w-full text-left border-collapse text-xs">
+                        <thead class="bg-indigo-950 text-white sticky top-0">
+                            <tr>
+                                <th class="p-2">WU ID</th>
+                                <th class="p-2">Exact Registered Station Name</th>
+                                <th class="p-2">City / Area</th>
+                                <th class="p-2">Kurdish Label (Editable)</th>
+                                <th class="p-2">Coordinates (Lat, Lon)</th>
+                                <th class="p-2">Elev / Dist</th>
+                                <th class="p-2">Live Parameters (Temp / Hum / Wind / Rain)</th>
+                                <th class="p-2">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="discoveredStationsTableBody" class="divide-y divide-slate-200">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 2. ACTIVE STATIONS IN YOUR LIST -->
+            <div class="space-y-2">
+                <div class="flex justify-between items-center">
+                    <h4 class="text-xs font-extrabold uppercase tracking-wider text-slate-600">
+                        <i class="fa-solid fa-tower-observation text-blue-600 mr-1"></i> Your Saved Stations List (<span id="savedStationCountLbl">4</span> Stations)
+                    </h4>
+                    <button onclick="resetDefaultStations()" class="px-2.5 py-1 text-[11px] font-bold text-rose-600 hover:bg-rose-50 rounded border border-rose-200">
+                        Reset to Default 4 Stations
+                    </button>
+                </div>
+                <div class="space-y-1.5 max-h-44 overflow-y-auto pr-1" id="modalStationList"></div>
+            </div>
+
+            <!-- 3. MANUAL STATION ENTRY & PERSONAL API KEY -->
+            <div class="grid grid-cols-1 md:grid-cols-12 gap-4 border-t border-slate-200 pt-3">
+                <div class="md:col-span-7 space-y-2">
+                    <h4 class="text-xs font-extrabold uppercase text-slate-500">Manual Station Entry (Any WU ID)</h4>
+                    <div class="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+                        <input type="text" id="newStName" placeholder="Exact Station Name" class="bg-slate-100 border border-slate-300 rounded px-2 py-1.5 text-xs">
+                        <input type="text" id="newStKuName" placeholder="ناوی کوردی" class="bg-slate-100 border border-slate-300 rounded px-2 py-1.5 text-xs ku-font">
+                        <input type="text" id="newStId" placeholder="WU ID (e.g. IKANIS1)" class="bg-slate-100 border border-slate-300 rounded px-2 py-1.5 text-xs font-mono uppercase">
+                        <input type="number" step="0.0001" id="newStLat" placeholder="Lat (35.55)" class="bg-slate-100 border border-slate-300 rounded px-2 py-1.5 text-xs">
+                        <input type="number" step="0.0001" id="newStLon" placeholder="Lon (45.45)" class="bg-slate-100 border border-slate-300 rounded px-2 py-1.5 text-xs">
+                    </div>
+                    <button onclick="addNewStation()" class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg">
+                        <i class="fa-solid fa-plus mr-1"></i> Add Custom Station
+                    </button>
+                </div>
+
+                <div class="md:col-span-5 p-3 rounded-xl bg-amber-50 border border-amber-300 space-y-1.5">
+                    <label class="block text-[11px] font-extrabold uppercase text-amber-800">
+                        <i class="fa-solid fa-key mr-1"></i> Personal WU API Key (Optional)
+                    </label>
+                    <div class="flex gap-1.5">
+                        <input type="text" id="customApiKeyInput" placeholder="Paste 32-char WU Key..." class="flex-1 bg-white border border-slate-300 rounded px-2.5 py-1 text-xs font-mono">
+                        <button onclick="saveCustomApiKey()" class="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- =================================================================== -->
+    <!-- JAVASCRIPT: GRADUATED BLACK PIN SYMBOLS + IN-MAP LABEL/PIN SWITCHES -->
+    <!-- =================================================================== -->
+    <script>
+        // ====================================================================
+        // PIN / UNPIN & COLLAPSE / HIDE TOP RIBBON CONTROLLERS
+        // ====================================================================
+        let isRibbonPinned = true;
+
+        function togglePinRibbon() {
+            isRibbonPinned = !isRibbonPinned;
+            const toolbar = document.getElementById("controlToolbar");
+            const btn = document.getElementById("pinRibbonBtn");
+            const txt = document.getElementById("pinRibbonText");
+
+            if (isRibbonPinned) {
+                toolbar.classList.add("sticky", "top-0");
+                toolbar.classList.remove("relative");
+                btn.className = "px-2.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition";
+                txt.textContent = "Pinned";
+            } else {
+                toolbar.classList.remove("sticky", "top-0");
+                toolbar.classList.add("relative");
+                btn.className = "px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 rounded-lg text-xs font-bold flex items-center gap-1.5 transition";
+                txt.textContent = "Unpinned";
+            }
+        }
+
+        function toggleRibbonCollapse(hide) {
+            const toolbar = document.getElementById("controlToolbar");
+            const restoreBar = document.getElementById("floatingRestoreBar");
+
+            if (hide) {
+                toolbar.classList.add("hidden");
+                restoreBar.classList.remove("hidden");
+            } else {
+                toolbar.classList.remove("hidden");
+                restoreBar.classList.add("hidden");
+            }
+
+            setTimeout(() => {
+                refreshAllMapsSizeAndTiles();
+            }, 150);
+        }
+
+        // ====================================================================
+        // IN-MAP & GLOBAL STATION LABEL / POINT VISIBILITY CONTROLLERS
+        // ====================================================================
+        // labelMode: 'full' (Station Name + Value), 'val' (Value Only), 'off' (Hidden)
+        const mapDisplayConfig = {
+            map1:  { labelMode: 'full', showPins: true },
+            map2:  { labelMode: 'full', showPins: true },
+            mapQ1: { labelMode: 'full', showPins: true },
+            mapQ2: { labelMode: 'full', showPins: true },
+            mapQ3: { labelMode: 'full', showPins: true },
+            mapQ4: { labelMode: 'full', showPins: true }
+        };
+
+        let globalLabelMode = 'full';
+        let globalShowPins = true;
+
+        function updateMapControlButtonsUI(mapKey) {
+            const cfg = mapDisplayConfig[mapKey];
+            const lblBtn = document.getElementById(`lblBtn-${mapKey}`);
+            const pinBtn = document.getElementById(`pinBtn-${mapKey}`);
+
+            if (lblBtn) {
+                if (cfg.labelMode === 'full') {
+                    lblBtn.className = "map-ctrl-btn active";
+                    lblBtn.innerHTML = `<i class="fa-solid fa-tag"></i> <span>Labels: ON</span>`;
+                } else if (cfg.labelMode === 'val') {
+                    lblBtn.className = "map-ctrl-btn active";
+                    lblBtn.innerHTML = `<i class="fa-solid fa-hashtag"></i> <span>Labels: Val</span>`;
+                } else {
+                    lblBtn.className = "map-ctrl-btn";
+                    lblBtn.innerHTML = `<i class="fa-solid fa-eye-slash"></i> <span>Labels: OFF</span>`;
+                }
+            }
+
+            if (pinBtn) {
+                if (cfg.showPins) {
+                    pinBtn.className = "map-ctrl-btn active";
+                    pinBtn.innerHTML = `<i class="fa-solid fa-location-dot"></i> <span>Points: ON</span>`;
+                } else {
+                    pinBtn.className = "map-ctrl-btn";
+                    pinBtn.innerHTML = `<i class="fa-solid fa-ban"></i> <span>Points: OFF</span>`;
+                }
+            }
+        }
+
+        // Cycles a single map's label state: ON (Name + Val) -> Val Only -> OFF
+        function toggleMapLabelState(mapKey) {
+            const cur = mapDisplayConfig[mapKey].labelMode;
+            mapDisplayConfig[mapKey].labelMode = cur === 'full' ? 'off' : (cur === 'off' ? 'val' : 'full');
+            updateMapControlButtonsUI(mapKey);
+            renderAllActiveMaps();
+        }
+
+        // Toggles a single map's graduated black point symbols ON or OFF
+        function toggleMapPinState(mapKey) {
+            mapDisplayConfig[mapKey].showPins = !mapDisplayConfig[mapKey].showPins;
+            updateMapControlButtonsUI(mapKey);
+            renderAllActiveMaps();
+        }
+
+        // Global toggle for all maps' labels from top ribbon
+        function toggleGlobalStationLabels() {
+            globalLabelMode = globalLabelMode === 'full' ? 'off' : (globalLabelMode === 'off' ? 'val' : 'full');
+            Object.keys(mapDisplayConfig).forEach(k => {
+                mapDisplayConfig[k].labelMode = globalLabelMode;
+                updateMapControlButtonsUI(k);
+            });
+
+            const gTxt = document.getElementById("globalLabelToggleTxt");
+            const gBtn = document.getElementById("globalLabelToggleBtn");
+            if (globalLabelMode === 'full') {
+                gTxt.textContent = "Labels: ON (Name + Val)";
+                gBtn.className = "px-2.5 py-0.5 text-[11px] bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-400 rounded font-extrabold flex items-center gap-1 transition";
+            } else if (globalLabelMode === 'val') {
+                gTxt.textContent = "Labels: Value Only";
+                gBtn.className = "px-2.5 py-0.5 text-[11px] bg-blue-600 hover:bg-blue-500 text-white border border-blue-400 rounded font-extrabold flex items-center gap-1 transition";
+            } else {
+                gTxt.textContent = "Labels: OFF";
+                gBtn.className = "px-2.5 py-0.5 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 rounded font-bold flex items-center gap-1 transition";
+            }
+
+            renderAllActiveMaps();
+        }
+
+        // Global toggle for all maps' black point pins from top ribbon
+        function toggleGlobalStationPins() {
+            globalShowPins = !globalShowPins;
+            Object.keys(mapDisplayConfig).forEach(k => {
+                mapDisplayConfig[k].showPins = globalShowPins;
+                updateMapControlButtonsUI(k);
+            });
+
+            const pTxt = document.getElementById("globalPinToggleTxt");
+            const pBtn = document.getElementById("globalPinToggleBtn");
+            if (globalShowPins) {
+                pTxt.textContent = "Points: ON";
+                pBtn.className = "px-2.5 py-0.5 text-[11px] bg-slate-700 hover:bg-slate-600 text-white border border-slate-500 rounded font-extrabold flex items-center gap-1 transition";
+            } else {
+                pTxt.textContent = "Points: OFF";
+                pBtn.className = "px-2.5 py-0.5 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700 rounded font-bold flex items-center gap-1 transition";
+            }
+
+            renderAllActiveMaps();
+        }
+
+        // ====================================================================
+        // 1. PARAMETER DEFINITIONS, COLOR RAMPS & EXACT STATION DICTIONARY
+        // ====================================================================
+        const PARAM_SPECS = {
+            tempMin: {
+                code: "min_temp_c",
+                unit: "°C",
+                enTitle: "Map of Lowest Recorded Temperature (°C)",
+                kuTitle: "نەخشەی نزمترین پلەی گەرمی تۆمارکراو",
+                bannerClass: "bg-sky-700",
+                ramp: [
+                    [70, 148, 73],  [109, 179, 98], [156, 209, 132],
+                    [206, 232, 169],[245, 237, 179],[236, 198, 149],
+                    [214, 161, 124],[189, 128, 102],[163, 98, 82]
+                ]
+            },
+            tempMax: {
+                code: "max_temp_c",
+                unit: "°C",
+                enTitle: "Map of Highest Recorded Temperature (°C)",
+                kuTitle: "نەخشەی بەرزترین پلەی گەرمی تۆمارکراو",
+                bannerClass: "bg-red-700",
+                ramp: [
+                    [34, 139, 59],  [78, 176, 65],  [132, 207, 68],
+                    [194, 230, 62], [247, 234, 52], [252, 191, 38],
+                    [250, 138, 30], [242, 82, 24],  [220, 28, 19]
+                ]
+            },
+            tempAvg: {
+                code: "avg_temp_c",
+                unit: "°C",
+                enTitle: "Map of Mean Air Temperature (°C)",
+                kuTitle: "نەخشەی تێکڕای پلەی گەرمی تۆمارکراو",
+                bannerClass: "bg-amber-600",
+                ramp: [
+                    [43, 131, 186], [100, 171, 176],[157, 211, 167],
+                    [215, 239, 155],[255, 255, 191],[254, 215, 144],
+                    [253, 174, 97], [234, 99, 62],  [215, 25, 28]
+                ]
+            },
+            precipTotal: {
+                code: "precip_mm",
+                unit: "mm",
+                enTitle: "Map of Cumulative Precipitation (mm)",
+                kuTitle: "نەخشەی بڕی باران بارینی تۆمارکراو",
+                bannerClass: "bg-blue-800",
+                ramp: [
+                    [224, 243, 248],[186, 228, 240],[137, 206, 235],
+                    [86, 176, 224], [44, 142, 209], [20, 108, 186],
+                    [10, 77, 156],  [8, 48, 107],   [88, 24, 148]
+                ]
+            },
+            precipRateMax: {
+                code: "rate_mm_h",
+                unit: "mm/h",
+                enTitle: "Map of Peak Precipitation Intensity (mm/hr)",
+                kuTitle: "نەخشەی چڕی باران بارین (mm/hr)",
+                bannerClass: "bg-indigo-800",
+                ramp: [
+                    [224, 243, 248],[171, 217, 233],[116, 173, 209],
+                    [69, 117, 180], [49, 54, 149],  [84, 39, 143],
+                    [117, 107, 177],[158, 154, 200],[203, 24, 29]
+                ]
+            },
+            humAvg: {
+                code: "hum_avg_pct",
+                unit: "%",
+                enTitle: "Map of Mean Relative Humidity (%)",
+                kuTitle: "نەخشەی تێکڕای ڕێژەی شێداری هەوا",
+                bannerClass: "bg-purple-800",
+                ramp: [
+                    [247, 252, 240],[224, 243, 219],[204, 235, 197],
+                    [168, 221, 181],[123, 204, 196],[78, 179, 211],
+                    [43, 140, 190], [8, 104, 172],  [8, 64, 129]
+                ]
+            },
+            humMax: {
+                code: "hum_max_pct",
+                unit: "%",
+                enTitle: "Map of Maximum Relative Humidity (%)",
+                kuTitle: "نەخشەی بەرزترین ڕێژەی شێداری هەوا",
+                bannerClass: "bg-purple-900",
+                ramp: [
+                    [237, 248, 251],[191, 211, 230],[158, 188, 218],
+                    [140, 150, 198],[140, 107, 177],[136, 65, 157],
+                    [129, 15, 124], [106, 13, 110], [77, 0, 75]
+                ]
+            },
+            dewAvg: {
+                code: "dew_pt_c",
+                unit: "°C",
+                enTitle: "Map of Mean Dew Point Temperature (°C)",
+                kuTitle: "نەخشەی پلەی شەونم (Dew Point)",
+                bannerClass: "bg-teal-700",
+                ramp: [
+                    [240, 249, 232],[204, 235, 197],[168, 221, 181],
+                    [123, 204, 196],[78, 179, 211], [43, 140, 190],
+                    [8, 104, 172],  [8, 64, 129],   [4, 38, 84]
+                ]
+            },
+            windMaxGust: {
+                code: "max_gust_kmh",
+                unit: "km/h",
+                enTitle: "Map of Maximum Wind Gust Speed (km/h)",
+                kuTitle: "نەخشەی بەرزترین خێرایی با (km/h)",
+                bannerClass: "bg-emerald-700",
+                ramp: [
+                    [237, 248, 233],[199, 233, 192],[161, 217, 155],
+                    [116, 196, 118],[65, 171, 93],  [35, 139, 69],
+                    [254, 178, 76], [240, 59, 32],  [189, 0, 38]
+                ]
+            },
+            windAvg: {
+                code: "avg_wind_kmh",
+                unit: "km/h",
+                enTitle: "Map of Mean Wind Speed (km/h)",
+                kuTitle: "نەخشەی تێکڕای خێرایی با (km/h)",
+                bannerClass: "bg-teal-800",
+                ramp: [
+                    [237, 248, 233],[199, 233, 192],[161, 217, 155],
+                    [116, 196, 118],[65, 171, 93],  [35, 139, 69],
+                    [0, 109, 44],   [0, 82, 33],    [0, 56, 22]
+                ]
+            },
+            pressAvg: {
+                code: "press_hpa",
+                unit: "hPa",
+                enTitle: "Map of Mean Barometric Pressure (hPa)",
+                kuTitle: "نەخشەی پەستانی هەوا (hPa)",
+                bannerClass: "bg-slate-700",
+                ramp: [
+                    [158, 1, 66],   [213, 62, 79],  [244, 109, 67],
+                    [253, 174, 97], [254, 224, 139],[230, 245, 152],
+                    [171, 221, 164],[102, 194, 165],[50, 136, 189]
+                ]
+            },
+            uvMax: {
+                code: "uv_max",
+                unit: "UV",
+                enTitle: "Map of Maximum UV Index",
+                kuTitle: "نەخشەی بەرزترین تیشکی سەروو بنەوشەیی (UV)",
+                bannerClass: "bg-orange-600",
+                ramp: [
+                    [102, 194, 165],[171, 221, 164],[230, 245, 152],
+                    [255, 255, 191],[254, 224, 139],[253, 174, 97],
+                    [244, 109, 67], [213, 62, 79],  [158, 1, 66]
+                ]
+            },
+            solarMax: {
+                code: "solar_wm2",
+                unit: "W/m²",
+                enTitle: "Map of Peak Solar Radiation (W/m²)",
+                kuTitle: "نەخشەی تیشکی خۆر (W/m²)",
+                bannerClass: "bg-amber-700",
+                ramp: [
+                    [255, 255, 204],[255, 237, 160],[254, 217, 118],
+                    [254, 178, 76], [253, 141, 60], [252, 78, 42],
+                    [227, 26, 28],  [189, 0, 38],   [128, 0, 38]
+                ]
+            }
+        };
+
+        const KNOWN_EXACT_NAMES = {
+            "IKANIS1":   { en: "Hawber Station",   ku: "وێستگەی هاوبیر",   area: "Sulaymaniyah (Kani Spika)" },
+            "IQALIA1":   { en: "UOS - New Campus", ku: "کەمپی نوێی زانکۆ", area: "Sulaymaniyah (Qlyasan)" },
+            "I90583621": { en: "UOS - Bakrajo",    ku: "بەکرەجۆ",          area: "Sulaymaniyah (Bakrajo)" },
+            "I90583618": { en: "UOS - Old Campus", ku: "کەمپی کۆنی زانکۆ", area: "Sulaymaniyah (Center)" }
+        };
+
+        const SULAIMANI_CENTER = { lat: 35.5613, lon: 45.4304 };
+
+        const REGIONAL_SEARCH_PROBES = [
+            { name: "Sulaymaniyah",   ku: "سلێمانی",   lat: 35.56, lon: 45.43 },
+            { name: "Halabja",        ku: "هەڵەبجە",   lat: 35.18, lon: 45.98 },
+            { name: "Rania / Dukan",  ku: "ڕانیە / دوکان", lat: 36.25, lon: 44.88 },
+            { name: "Kalar / Garmian",ku: "کەلار",     lat: 34.63, lon: 45.32 },
+            { name: "Chamchamal",     ku: "چەمچەماڵ",  lat: 35.53, lon: 44.83 },
+            { name: "Koya",           ku: "کۆیە",      lat: 36.08, lon: 44.63 },
+            { name: "Kirkuk",         ku: "کەرکووک",   lat: 35.47, lon: 44.39 },
+            { name: "Erbil",          ku: "هەولێر",    lat: 36.19, lon: 44.01 },
+            { name: "Soran / Choman", ku: "سۆران",     lat: 36.65, lon: 44.54 },
+            { name: "Duhok",          ku: "دهۆک",      lat: 36.86, lon: 42.99 },
+            { name: "Kermanshah / Marivan Border", ku: "مەریوان / کرماشان", lat: 35.52, lon: 46.17 }
+        ];
+
+        const DEFAULT_STATIONS = [
+            { id: "IKANIS1",   name: "Hawber Station",   kuName: "وێستگەی هاوبیر",   lat: 35.55, lon: 45.48, color: "#2563eb", selected: true },
+            { id: "IQALIA1",   name: "UOS - New Campus", kuName: "کەمپی نوێی زانکۆ", lat: 35.58, lon: 45.37, color: "#10b981", selected: true },
+            { id: "I90583621", name: "UOS - Bakrajo",    kuName: "بەکرەجۆ",          lat: 35.54, lon: 45.36, color: "#f59e0b", selected: true },
+            { id: "I90583618", name: "UOS - Old Campus", kuName: "کەمپی کۆنی زانکۆ", lat: 35.57, lon: 45.44, color: "#ec4899", selected: true }
+        ];
+
+        let STATIONS = loadStationsFromStorage();
+        let discoveredStationsPool = [];
+        let currentLang = "ku";
+        let stationStatsMap = {};
+
+        function loadStationsFromStorage() {
+            const raw = localStorage.getItem("uos_stations");
+            if (!raw) return [...DEFAULT_STATIONS];
+            try {
+                const parsed = JSON.parse(raw);
+                return parsed.map(st => ({
+                    ...st,
+                    name: KNOWN_EXACT_NAMES[st.id]?.en || st.name,
+                    kuName: st.kuName || KNOWN_EXACT_NAMES[st.id]?.ku || st.name,
+                    selected: st.selected !== undefined ? st.selected : true
+                }));
+            } catch (e) {
+                return [...DEFAULT_STATIONS];
+            }
+        }
+
+        function saveStationsToStorage() {
+            localStorage.setItem("uos_stations", JSON.stringify(STATIONS));
+        }
+
+        function calcDistanceKm(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) ** 2 +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon / 2) ** 2;
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        }
+
+        function guessKurdishName(nameStr, idStr) {
+            if (KNOWN_EXACT_NAMES[idStr]) return KNOWN_EXACT_NAMES[idStr].ku;
+            const s = (nameStr || "").toLowerCase();
+            if (s.includes("hawber")) return "وێستگەی هاوبەر";
+            if (s.includes("bakrajo")) return "بەکرەجۆ";
+            if (s.includes("qalia") || s.includes("qlyasan")) return "کەمپی نوێی زانکۆ";
+            if (s.includes("kanis")) return "کانی سپیکە";
+            if (s.includes("sulay") || s.includes("sulai") || s.includes("slemani")) return `سلێمانی (${idStr})`;
+            if (s.includes("erbil") || s.includes("hawler") || s.includes("arbil")) return `هەولێر (${idStr})`;
+            if (s.includes("kirkuk")) return `کەرکووک (${idStr})`;
+            if (s.includes("duhok") || s.includes("dahuk")) return `دهۆک (${idStr})`;
+            if (s.includes("halabja")) return `هەڵەبجە (${idStr})`;
+            if (s.includes("kalar")) return `کەلار (${idStr})`;
+            if (s.includes("rania") || s.includes("ranya")) return `ڕانیە (${idStr})`;
+            if (s.includes("dukan") || s.includes("dokan")) return `دوکان (${idStr})`;
+            if (s.includes("chamchamal")) return `چەمچەماڵ (${idStr})`;
+            if (s.includes("koya") || s.includes("koy")) return `کۆیە (${idStr})`;
+            if (s.includes("soran")) return `سۆران (${idStr})`;
+            if (s.includes("zakho")) return `زاخۆ (${idStr})`;
+            if (s.includes("penj")) return `پێنجوێن (${idStr})`;
+            if (s.includes("darband")) return `دەربەندیخان (${idStr})`;
+            return `${nameStr}`;
+        }
+
+        // ====================================================================
+        // 2. WEATHER UNDERGROUND API ENGINE & EXACT PWS NAME VERIFIER
+        // ====================================================================
+        const BUILTIN_WU_KEYS = [
+            "e1f10a1e78da46f5b10a1e78da96f525",
+            "6532d6454b8aa370768e63d6ba5a832e",
+            "8de2d8b3a93542c9a2d8b3a935a2c909"
+        ];
+        let customWuKey = localStorage.getItem("uos_custom_wu_key") || "";
+        let currentKeyIndex = 0;
+        const API_MEMORY_CACHE = new Map();
+
+        function getActiveKeyPool() {
+            return customWuKey ? [customWuKey, ...BUILTIN_WU_KEYS] : BUILTIN_WU_KEYS;
+        }
+
+        function saveCustomApiKey() {
+            const val = document.getElementById("customApiKeyInput").value.trim();
+            customWuKey = val;
+            if (val) localStorage.setItem("uos_custom_wu_key", val);
+            else localStorage.removeItem("uos_custom_wu_key");
+            fetchAndRenderMaps();
+        }
+
+        async function safeWuFetch(baseUrlWithoutKey, cacheKey = null) {
+            if (cacheKey) {
+                if (API_MEMORY_CACHE.has(cacheKey)) return API_MEMORY_CACHE.get(cacheKey);
+                try {
+                    const saved = localStorage.getItem("wucache_" + cacheKey);
+                    if (saved) {
+                        const parsed = JSON.parse(saved);
+                        API_MEMORY_CACHE.set(cacheKey, parsed);
+                        return parsed;
+                    }
+                } catch (e) {}
+            }
+
+            const keys = getActiveKeyPool();
+            for (let attempt = 0; attempt < keys.length; attempt++) {
+                const idx = (currentKeyIndex + attempt) % keys.length;
+                const fullUrl = `${baseUrlWithoutKey}&apiKey=${keys[idx]}`;
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 7000);
+
+                try {
+                    const res = await fetch(fullUrl, { signal: controller.signal });
+                    clearTimeout(timeoutId);
+                    if (res.status === 204) return { observations: [] };
+                    if (res.status === 429 || res.status === 401 || res.status === 403) continue;
+                    if (res.ok) {
+                        currentKeyIndex = idx;
+                        const text = await res.text();
+                        if (!text || !text.trim()) return { observations: [] };
+                        const json = JSON.parse(text);
+                        if (cacheKey && (json?.observations?.length > 0 || json?.location?.stationId?.length > 0)) {
+                            API_MEMORY_CACHE.set(cacheKey, json);
+                            try { localStorage.setItem("wucache_" + cacheKey, JSON.stringify(json)); } catch (e) {}
+                        }
+                        return json;
+                    }
+                } catch (err) {
+                    clearTimeout(timeoutId);
+                }
+            }
+            return null;
+        }
+
+        async function fetchExactStationMetadataAndCurrentObs(stObj) {
+            const url = `https://api.weather.com/v2/pws/observations/current?stationId=${stObj.id}&format=json&units=m&numericPrecision=decimal`;
+            const json = await safeWuFetch(url, null);
+            const obs = json?.observations?.[0];
+
+            if (obs) {
+                const m = obs.metric || {};
+                const exactOwnerName = KNOWN_EXACT_NAMES[stObj.id]?.en
+                    || (obs.neighborhood && obs.neighborhood.trim() ? obs.neighborhood.trim() : null)
+                    || stObj.rawNeighborhood
+                    || stObj.rawStationName
+                    || stObj.id;
+
+                const cityArea = KNOWN_EXACT_NAMES[stObj.id]?.area
+                    || [stObj.rawCity, obs.country].filter(Boolean).join(", ")
+                    || "Kurdistan Region";
+
+                return {
+                    ...stObj,
+                    exactName: exactOwnerName,
+                    cityArea: cityArea,
+                    kuName: KNOWN_EXACT_NAMES[stObj.id]?.ku || guessKurdishName(exactOwnerName, stObj.id),
+                    lat: Number((obs.lat ?? stObj.lat).toFixed(4)),
+                    lon: Number((obs.lon ?? stObj.lon).toFixed(4)),
+                    elevM: m.elev !== undefined && m.elev !== null ? `${Math.round(m.elev)} m` : "--",
+                    softwareType: obs.softwareType || "PWS",
+                    liveTemp: m.temp !== undefined ? `${Number(m.temp).toFixed(1)}°C` : "--",
+                    liveHum: obs.humidity !== undefined ? `${obs.humidity}%` : "--",
+                    liveWind: m.windSpeed !== undefined ? `${Number(m.windSpeed).toFixed(1)} km/h` : "--",
+                    liveRain: m.precipTotal !== undefined ? `${Number(m.precipTotal).toFixed(1)} mm` : "0.0 mm",
+                    livePress: m.pressure !== undefined ? `${Number(m.pressure).toFixed(1)} hPa` : "--",
+                    isOnline: true
+                };
+            }
+
+            const fallbackName = KNOWN_EXACT_NAMES[stObj.id]?.en
+                || stObj.rawNeighborhood
+                || stObj.rawStationName
+                || stObj.id;
+
+            return {
+                ...stObj,
+                exactName: fallbackName,
+                cityArea: KNOWN_EXACT_NAMES[stObj.id]?.area || stObj.rawCity || "Surrounding Region",
+                kuName: KNOWN_EXACT_NAMES[stObj.id]?.ku || guessKurdishName(fallbackName, stObj.id),
+                elevM: "--",
+                liveTemp: "--",
+                liveHum: "--",
+                liveWind: "--",
+                liveRain: "--",
+                livePress: "--",
+                isOnline: false
+            };
+        }
+
+        async function scanNearbyWuStations() {
+            const maxRadiusKm = parseFloat(document.getElementById("radarRadiusSelect").value || "200");
+            const statusEl = document.getElementById("discoveryStatusText");
+            const btn = document.getElementById("scanWuBtn");
+
+            btn.disabled = true;
+            statusEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-indigo-600"></i> Step 1/2: Scanning Weather Underground PWS radar within ${maxRadiusKm} km of Sulaymaniyah...`;
+
+            const candidateMap = new Map();
+
+            DEFAULT_STATIONS.forEach(st => {
+                const dist = calcDistanceKm(SULAIMANI_CENTER.lat, SULAIMANI_CENTER.lon, st.lat, st.lon);
+                candidateMap.set(st.id, {
+                    id: st.id,
+                    rawNeighborhood: st.name,
+                    rawStationName: st.name,
+                    rawCity: "Sulaymaniyah",
+                    lat: st.lat,
+                    lon: st.lon,
+                    distanceKm: Number(dist.toFixed(1))
+                });
+            });
+
+            for (let i = 0; i < REGIONAL_SEARCH_PROBES.length; i++) {
+                const probe = REGIONAL_SEARCH_PROBES[i];
+                const url = `https://api.weather.com/v3/location/near?geocode=${probe.lat},${probe.lon}&product=pws&format=json`;
+                const json = await safeWuFetch(url, `near_v2_${probe.lat}_${probe.lon}`);
+
+                if (json && json.location && Array.isArray(json.location.stationId)) {
+                    const loc = json.location;
+                    for (let j = 0; j < loc.stationId.length; j++) {
+                        const stId = loc.stationId[j];
+                        const lat = Number(loc.latitude?.[j]);
+                        const lon = Number(loc.longitude?.[j]);
+                        if (!stId || isNaN(lat) || isNaN(lon)) continue;
+
+                        const distFromSuli = calcDistanceKm(SULAIMANI_CENTER.lat, SULAIMANI_CENTER.lon, lat, lon);
+                        if (distFromSuli <= maxRadiusKm && !candidateMap.has(stId)) {
+                            const pwsNeighborhood = (loc.neighborhood?.[j] || "").trim();
+                            const pwsStationName = (loc.stationName?.[j] || "").trim();
+
+                            candidateMap.set(stId, {
+                                id: stId,
+                                rawNeighborhood: pwsNeighborhood || pwsStationName || `${stId}`,
+                                rawStationName: pwsStationName || probe.name,
+                                rawCity: probe.name,
+                                lat: Number(lat.toFixed(4)),
+                                lon: Number(lon.toFixed(4)),
+                                distanceKm: Number(distFromSuli.toFixed(1))
+                            });
+                        }
+                    }
+                }
+            }
+
+            const candidates = Array.from(candidateMap.values()).sort((a, b) => a.distanceKm - b.distanceKm);
+
+            statusEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-indigo-600"></i> Step 2/2: Fetching exact registered PWS names & live parameters for ${candidates.length} stations...`;
+
+            discoveredStationsPool = [];
+            const batchSize = 5;
+            for (let i = 0; i < candidates.length; i += batchSize) {
+                const batch = candidates.slice(i, i + batchSize);
+                const verifiedBatch = await Promise.all(batch.map(c => fetchExactStationMetadataAndCurrentObs(c)));
+                discoveredStationsPool = discoveredStationsPool.concat(verifiedBatch);
+                renderDiscoveredStationsTable();
+            }
+
+            btn.disabled = false;
+            statusEl.innerHTML = `<span class="text-emerald-700 font-bold"><i class="fa-solid fa-circle-check"></i> Verified ${discoveredStationsPool.length} stations within ${maxRadiusKm} km of Sulaymaniyah with exact registered names & live telemetry.</span> You can edit any name/Kurdish label before clicking <b>+ Add to Map</b>.`;
+        }
+
+        function renderDiscoveredStationsTable() {
+            const tbody = document.getElementById("discoveredStationsTableBody");
+            if (!tbody) return;
+            tbody.innerHTML = "";
+
+            if (discoveredStationsPool.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" class="p-4 text-center text-slate-400">Click "Scan Live WU API" above to discover surrounding stations with exact names, coordinates, and live weather parameters.</td></tr>`;
+                return;
+            }
+
+            const existingIds = new Set(STATIONS.map(s => s.id));
+
+            discoveredStationsPool.forEach((st, idx) => {
+                const isAdded = existingIds.has(st.id);
+                const tr = document.createElement("tr");
+                tr.className = "hover:bg-indigo-50/60 transition";
+                tr.innerHTML = `
+                    <td class="p-2 font-mono font-extrabold text-blue-700">${st.id}</td>
+                    <td class="p-2">
+                        <input type="text" id="disc-en-${idx}" value="${st.exactName.replace(/"/g, '&quot;')}" class="w-44 bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-bold text-slate-900 focus:border-indigo-500" title="Exact Registered PWS Name (Editable)">
+                    </td>
+                    <td class="p-2 text-[11px] font-semibold text-slate-600">${st.cityArea}</td>
+                    <td class="p-2">
+                        <input type="text" id="disc-ku-${idx}" value="${(st.kuName || '').replace(/"/g, '&quot;')}" class="w-36 bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-bold text-indigo-800 ku-font focus:border-indigo-500" title="Kurdish Map Label (Editable)">
+                    </td>
+                    <td class="p-2 font-mono text-[11px] text-slate-700">${st.lat.toFixed(4)}°N, ${st.lon.toFixed(4)}°E</td>
+                    <td class="p-2 text-[11px]">
+                        <div class="font-bold text-slate-800">${st.distanceKm} km</div>
+                        <div class="text-slate-500">Elev: ${st.elevM}</div>
+                    </td>
+                    <td class="p-2 text-[11px]">
+                        ${st.isOnline
+                            ? `<div class="flex flex-wrap gap-1.5 font-mono">
+                                <span class="px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 font-bold" title="Live Temp">🌡️ ${st.liveTemp}</span>
+                                <span class="px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 font-bold" title="Live Humidity">💧 ${st.liveHum}</span>
+                                <span class="px-1.5 py-0.5 rounded bg-teal-100 text-teal-800 font-bold" title="Live Wind">🌬️ ${st.liveWind}</span>
+                                <span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 font-bold" title="Today Precip">🌧️ ${st.liveRain}</span>
+                               </div>`
+                            : `<span class="text-slate-400 italic">Historical Archive Available</span>`
+                        }
+                    </td>
+                    <td class="p-2">
+                        ${isAdded
+                            ? `<span class="px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[11px] inline-flex items-center gap-1"><i class="fa-solid fa-check"></i> Added</span>`
+                            : `<button onclick="addDiscoveredStationByIndex(${idx})" class="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold text-[11px] shadow transition inline-flex items-center gap-1"><i class="fa-solid fa-plus"></i> Add to Map</button>`
+                        }
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function addDiscoveredStationByIndex(idx) {
+            const st = discoveredStationsPool[idx];
+            if (!st) return;
+
+            const customEn = document.getElementById(`disc-en-${idx}`)?.value.trim() || st.exactName;
+            const customKu = document.getElementById(`disc-ku-${idx}`)?.value.trim() || st.kuName || customEn;
+
+            if (!STATIONS.some(s => s.id === st.id)) {
+                STATIONS.push({
+                    id: st.id,
+                    name: customEn,
+                    kuName: customKu,
+                    lat: st.lat,
+                    lon: st.lon,
+                    color: "#3b82f6",
+                    selected: true
+                });
+                saveStationsToStorage();
+                renderStationChecklistBar();
+                renderDiscoveredStationsTable();
+                fetchAndRenderMaps();
+            }
+        }
+
+        function addAllDiscoveredStations() {
+            if (discoveredStationsPool.length === 0) {
+                alert("Please click 'Scan Live WU API' first to discover nearby stations.");
+                return;
+            }
+            let addedCount = 0;
+            discoveredStationsPool.forEach((st, idx) => {
+                if (!STATIONS.some(s => s.id === st.id)) {
+                    const customEn = document.getElementById(`disc-en-${idx}`)?.value.trim() || st.exactName;
+                    const customKu = document.getElementById(`disc-ku-${idx}`)?.value.trim() || st.kuName || customEn;
+                    STATIONS.push({
+                        id: st.id,
+                        name: customEn,
+                        kuName: customKu,
+                        lat: st.lat,
+                        lon: st.lon,
+                        color: "#3b82f6",
+                        selected: true
+                    });
+                    addedCount++;
+                }
+            });
+            saveStationsToStorage();
+            renderStationChecklistBar();
+            renderDiscoveredStationsTable();
+            if (addedCount > 0) {
+                fetchAndRenderMaps();
+            }
+        }
+
+        // ====================================================================
+        // 3. HISTORICAL & INTRADAY STATION TELEMETRY FETCHER
+        // ====================================================================
+        function toLocalYMD(dateObj) {
+            const y = dateObj.getFullYear();
+            const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+            const d = String(dateObj.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+
+        function getDateChunks(startStr, endStr, maxDays) {
+            const chunks = [];
+            const [sy, sm, sd] = startStr.split("-").map(Number);
+            const [ey, em, ed] = endStr.split("-").map(Number);
+            let curr = new Date(sy, sm - 1, sd);
+            const end = new Date(ey, em - 1, ed);
+            while (curr <= end) {
+                let next = new Date(curr);
+                next.setDate(curr.getDate() + maxDays);
+                if (next > end) next = new Date(end);
+                chunks.push({
+                    start: toLocalYMD(curr).replaceAll("-", ""),
+                    end: toLocalYMD(next).replaceAll("-", "")
+                });
+                curr = new Date(next);
+                curr.setDate(curr.getDate() + 1);
+            }
+            return chunks;
+        }
+
+        function firstNum(...vals) {
+            for (const v of vals) {
+                if (v !== undefined && v !== null && !isNaN(v)) return Number(v);
+            }
+            return null;
+        }
+
+        async function fetchStationSummaryForRange(st, startVal, endVal) {
+            let rawObs = [];
+            const todayStr = toLocalYMD(new Date());
+            const todayYMD = todayStr.replaceAll("-", "");
+
+            if (startVal === todayStr && endVal === todayStr) {
+                const baseUrl = `https://api.weather.com/v2/pws/observations/all/1day?stationId=${st.id}&format=json&units=m&numericPrecision=decimal`;
+                const json = await safeWuFetch(baseUrl, null);
+                rawObs = json?.observations || [];
+            } else {
+                const chunks = getDateChunks(startVal, endVal, 30);
+                for (const ch of chunks) {
+                    const isPast = (ch.end < todayYMD);
+                    const cacheKey = isPast ? `day_${st.id}_${ch.start}_${ch.end}` : null;
+                    const baseUrl = `https://api.weather.com/v2/pws/history/daily?stationId=${st.id}&format=json&units=m&startDate=${ch.start}&endDate=${ch.end}&numericPrecision=decimal`;
+                    const json = await safeWuFetch(baseUrl, cacheKey);
+                    if (json?.observations) rawObs = rawObs.concat(json.observations);
+                }
+            }
+
+            const dedup = new Map();
+            rawObs.forEach(o => {
+                if (!o.obsTimeLocal) return;
+                const dPart = o.obsTimeLocal.slice(0, 10);
+                if (dPart >= startVal && dPart <= endVal) {
+                    dedup.set(o.obsTimeLocal.slice(0, 16), o);
+                }
+            });
+            const list = Array.from(dedup.values()).sort((a, b) => a.obsTimeLocal.localeCompare(b.obsTimeLocal));
+            if (list.length === 0) return null;
+
+            let prevDay = "";
+            let prevCum = 0;
+            const isIntraday = (startVal === todayStr && endVal === todayStr);
+
+            const parsed = list.map(o => {
+                const m = o.metric || {};
+                const dKey = o.obsTimeLocal.slice(0, 10);
+                const cumP = firstNum(m.precipTotal, 0);
+                let pVal = cumP;
+                if (isIntraday) {
+                    if (dKey !== prevDay) { pVal = cumP; prevDay = dKey; }
+                    else { pVal = Math.max(0, Number((cumP - prevCum).toFixed(2))); }
+                    prevCum = cumP;
+                }
+                return {
+                    tempAvg: firstNum(m.tempAvg, m.temp),
+                    tempHigh: firstNum(m.tempHigh, m.tempAvg, m.temp),
+                    tempLow: firstNum(m.tempLow, m.tempAvg, m.temp),
+                    dewpt: firstNum(m.dewptAvg, m.dewpt),
+                    humidity: firstNum(o.humidityAvg, o.humidity),
+                    humidityHigh: firstNum(o.humidityHigh, o.humidityAvg, o.humidity),
+                    precip: pVal,
+                    precipRate: firstNum(m.precipRate, 0),
+                    windSpeed: firstNum(m.windspeedAvg, m.windSpeed),
+                    windGust: firstNum(m.windgustHigh, m.windgustAvg, m.windGust),
+                    pressure: firstNum(m.pressureMax, m.pressureMin, m.pressure),
+                    uv: firstNum(o.uvHigh, o.uv),
+                    solar: firstNum(o.solarRadiationHigh, o.solarRadiation)
+                };
+            });
+
+            const valid = (k) => parsed.map(x => x[k]).filter(v => v !== null && !isNaN(v));
+            const mean = (arr) => arr.length ? Number((arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1)) : null;
+            const max = (arr) => arr.length ? Number(Math.max(...arr).toFixed(1)) : null;
+            const min = (arr) => arr.length ? Number(Math.min(...arr).toFixed(1)) : null;
+            const sum = (arr) => arr.length ? Number(arr.reduce((a, b) => a + b, 0).toFixed(2)) : 0;
+
+            return {
+                stationId: st.id,
+                name: st.name,
+                kuName: st.kuName || st.name,
+                lat: st.lat,
+                lon: st.lon,
+                tempAvg: mean(valid("tempAvg")),
+                tempMax: max(valid("tempHigh")),
+                tempMin: min(valid("tempLow")),
+                dewAvg: mean(valid("dewpt")),
+                humAvg: mean(valid("humidity")),
+                humMax: max(valid("humidityHigh")),
+                precipTotal: sum(valid("precip")),
+                precipRateMax: max(valid("precipRate")),
+                windAvg: mean(valid("windSpeed")),
+                windMaxGust: max(valid("windGust")),
+                pressAvg: mean(valid("pressure")),
+                uvMax: max(valid("uv")),
+                solarMax: max(valid("solar"))
+            };
+        }
+
+        // ====================================================================
+        // 4. LEAFLET MAPS, TILE LAYER SWITCHER & IDW CANVAS OVERLAY
+        // ====================================================================
+        const maps = {};
+        const baseTileLayers = {};
+        const idwCanvasLayers = {};
+        const markerLayers = {};
+
+        const IDWCanvasOverlay = L.Layer.extend({
+            initialize: function (mapKey) {
+                this.mapKey = mapKey;
+                this.points = [];
+                this.breaks = [];
+                this.ramp = [];
+                this.clipMode = "buffer";
+                this.power = 2.3;
+                this.opacity = 0.78;
+            },
+            onAdd: function (map) {
+                this._map = map;
+                this._canvas = L.DomUtil.create("canvas", "leaflet-layer");
+                this._canvas.style.pointerEvents = "none";
+                this._canvas.style.zIndex = "250";
+                map.getPanes().overlayPane.appendChild(this._canvas);
+                map.on("moveend zoomend resize", this._reset, this);
+                this._reset();
+            },
+            onRemove: function (map) {
+                L.DomUtil.remove(this._canvas);
+                map.off("moveend zoomend resize", this._reset, this);
+            },
+            setData: function (points, breaks, ramp, clipMode, power, opacity) {
+                this.points = points || [];
+                this.breaks = breaks || [];
+                this.ramp = ramp || [];
+                this.clipMode = clipMode || "buffer";
+                this.power = power || 2.3;
+                this.opacity = opacity || 0.78;
+                this._reset();
+            },
+            _reset: function () {
+                if (!this._map || !this._canvas) return;
+                const size = this._map.getSize();
+                if (size.x <= 0 || size.y <= 0) return;
+                const topLeft = this._map.containerPointToLayerPoint([0, 0]);
+                L.DomUtil.setPosition(this._canvas, topLeft);
+                this._canvas.width = size.x;
+                this._canvas.height = size.y;
+                this._redraw();
+            },
+            _redraw: function () {
+                if (!this._map || !this._canvas) return;
+                const ctx = this._canvas.getContext("2d");
+                const W = this._canvas.width;
+                const H = this._canvas.height;
+                if (W <= 0 || H <= 0) return;
+                ctx.clearRect(0, 0, W, H);
+
+                if (!this.points || this.points.length === 0) return;
+
+                const screenPts = this.points.map(p => {
+                    const pt = this._map.latLngToContainerPoint([p.lat, p.lon]);
+                    return { x: pt.x, y: pt.y, val: p.val };
+                });
+
+                let maxPairDist = 140;
+                if (screenPts.length >= 2) {
+                    let maxD = 0;
+                    for (let i = 0; i < screenPts.length; i++) {
+                        for (let j = i + 1; j < screenPts.length; j++) {
+                            const d = Math.hypot(screenPts[i].x - screenPts[j].x, screenPts[i].y - screenPts[j].y);
+                            if (d > maxD) maxD = d;
+                        }
+                    }
+                    maxPairDist = Math.max(95, maxD * 0.65);
+                }
+
+                const hullPoly = (this.clipMode === "hull" && screenPts.length >= 3)
+                    ? computeConvexHull(screenPts)
+                    : null;
+
+                const scale = 3;
+                const gw = Math.max(1, Math.ceil(W / scale));
+                const gh = Math.max(1, Math.ceil(H / scale));
+                const offCanvas = document.createElement("canvas");
+                offCanvas.width = gw;
+                offCanvas.height = gh;
+                const offCtx = offCanvas.getContext("2d");
+                const imgData = offCtx.createImageData(gw, gh);
+                const data = imgData.data;
+
+                const alphaByte = Math.round(this.opacity * 255);
+                const pwr = this.power;
+
+                for (let gy = 0; gy < gh; gy++) {
+                    const py = gy * scale + scale * 0.5;
+                    for (let gx = 0; gx < gw; gx++) {
+                        const px = gx * scale + scale * 0.5;
+
+                        if (this.clipMode === "hull" && hullPoly) {
+                            if (!pointInPolygonOrNearEdge(px, py, hullPoly, 26)) continue;
+                        } else if (this.clipMode === "buffer") {
+                            let minDist = Infinity;
+                            for (let i = 0; i < screenPts.length; i++) {
+                                const d = Math.hypot(px - screenPts[i].x, py - screenPts[i].y);
+                                if (d < minDist) minDist = d;
+                            }
+                            if (minDist > maxPairDist) continue;
+                        }
+
+                        let num = 0;
+                        let den = 0;
+                        let exactVal = null;
+
+                        for (let i = 0; i < screenPts.length; i++) {
+                            const dx = px - screenPts[i].x;
+                            const dy = py - screenPts[i].y;
+                            const distSq = dx * dx + dy * dy;
+                            if (distSq < 1.0) {
+                                exactVal = screenPts[i].val;
+                                break;
+                            }
+                            const w = 1.0 / Math.pow(Math.sqrt(distSq), pwr);
+                            num += w * screenPts[i].val;
+                            den += w;
+                        }
+
+                        const z = exactVal !== null ? exactVal : (num / den);
+
+                        let classIdx = 0;
+                        for (let b = 0; b < this.breaks.length; b++) {
+                            if (z >= this.breaks[b].min) classIdx = b;
+                        }
+                        const rgb = this.ramp[Math.min(classIdx, this.ramp.length - 1)] || [100, 150, 200];
+
+                        const idx = (gy * gw + gx) * 4;
+                        data[idx] = rgb[0];
+                        data[idx + 1] = rgb[1];
+                        data[idx + 2] = rgb[2];
+                        data[idx + 3] = alphaByte;
+                    }
+                }
+
+                offCtx.putImageData(imgData, 0, 0);
+                ctx.imageSmoothingEnabled = true;
+                ctx.drawImage(offCanvas, 0, 0, gw, gh, 0, 0, W, H);
+            }
+        });
+
+        function computeConvexHull(pts) {
+            const sorted = [...pts].sort((a, b) => a.x === b.x ? a.y - b.y : a.x - b.x);
+            const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+            const lower = [];
+            for (const p of sorted) {
+                while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+                lower.push(p);
+            }
+            const upper = [];
+            for (let i = sorted.length - 1; i >= 0; i--) {
+                const p = sorted[i];
+                while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+                upper.push(p);
+            }
+            upper.pop();
+            lower.pop();
+            return lower.concat(upper);
+        }
+
+        function pointInPolygonOrNearEdge(x, y, poly, bufferPx) {
+            let inside = false;
+            for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+                const xi = poly[i].x, yi = poly[i].y;
+                const xj = poly[j].x, yj = poly[j].y;
+                const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / ((yj - yi) || 1e-7) + xi);
+                if (intersect) inside = !inside;
+
+                const l2 = (xj - xi) ** 2 + (yj - yi) ** 2;
+                let t = l2 === 0 ? 0 : ((x - xi) * (xj - xi) + (y - yi) * (yj - yi)) / l2;
+                t = Math.max(0, Math.min(1, t));
+                const projX = xi + t * (xj - xi);
+                const projY = yi + t * (yj - yi);
+                if (Math.hypot(x - projX, y - projY) <= bufferPx) return true;
+            }
+            return inside;
+        }
+
+        function getBasemapUrl(mode) {
+            if (mode === "sat") return "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+            if (mode === "relief") return "https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}";
+            if (mode === "osm") return "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+            return "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}";
+        }
+
+        function createMapInstance(mapKey, containerId) {
+            const m = L.map(containerId, {
+                zoomControl: true,
+                attributionControl: false,
+                preferCanvas: true
+            }).setView([35.56, 45.42], 11);
+
+            const tileMode = document.getElementById("basemapSelect").value;
+            const baseLayer = L.tileLayer(getBasemapUrl(tileMode), {
+                maxZoom: 17,
+                crossOrigin: "anonymous"
+            }).addTo(m);
+            baseTileLayers[mapKey] = baseLayer;
+
+            const idwLayer = new IDWCanvasOverlay(mapKey);
+            idwLayer.addTo(m);
+            idwCanvasLayers[mapKey] = idwLayer;
+
+            const mLayer = L.layerGroup().addTo(m);
+            markerLayers[mapKey] = mLayer;
+
+            maps[mapKey] = m;
+        }
+
+        function changeBasemap() {
+            const mode = document.getElementById("basemapSelect").value;
+            const url = getBasemapUrl(mode);
+
+            Object.keys(maps).forEach(k => {
+                const m = maps[k];
+                if (baseTileLayers[k]) {
+                    m.removeLayer(baseTileLayers[k]);
+                }
+                const newTile = L.tileLayer(url, {
+                    maxZoom: 17,
+                    crossOrigin: "anonymous"
+                });
+                newTile.addTo(m);
+                newTile.bringToBack();
+                baseTileLayers[k] = newTile;
+            });
+
+            refreshAllMapsSizeAndTiles();
+        }
+
+        function refreshAllMapsSizeAndTiles() {
+            Object.keys(maps).forEach(k => {
+                maps[k].invalidateSize(true);
+                if (idwCanvasLayers[k]) {
+                    idwCanvasLayers[k]._reset();
+                }
+            });
+            renderAllActiveMaps();
+        }
+
+        let isSyncingMaps = false;
+        function syncMapGroup(sourceKey, targetKeys) {
+            if (!maps[sourceKey]) return;
+            maps[sourceKey].on("moveend", () => {
+                if (isSyncingMaps) return;
+                const size = maps[sourceKey].getSize();
+                if (size.x <= 0 || size.y <= 0) return;
+                isSyncingMaps = true;
+                const center = maps[sourceKey].getCenter();
+                const zoom = maps[sourceKey].getZoom();
+                targetKeys.forEach(tk => {
+                    if (maps[tk] && maps[tk].getSize().x > 0) {
+                        maps[tk].setView(center, zoom, { animate: false });
+                    }
+                });
+                isSyncingMaps = false;
+            });
+        }
+
+        // ====================================================================
+        // 5. GRADUATED BLACK PIN SVG GENERATOR & 9-CLASS GIS LEGEND RENDERER
+        // ====================================================================
+        // Generates an identical solid black map pin SVG at any pixel height (used in BOTH the Legend and the Map)
+        function getBlackPinSvg(heightPx) {
+            const w = Math.round(heightPx * 0.76);
+            const h = Math.round(heightPx);
+            return `<svg width="${w}" height="${h}" viewBox="0 0 24 32" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block; filter:drop-shadow(0 1px 2px rgba(255,255,255,0.9));">
+                <path d="M12 1C5.925 1 1 5.925 1 12C1 20.25 12 31 12 31C12 31 23 20.25 23 12C23 5.925 18.075 1 12 1Z" fill="#0f172a" stroke="#ffffff" stroke-width="2"/>
+                <circle cx="12" cy="11.5" r="3.8" fill="#ffffff"/>
+            </svg>`;
+        }
+
+        function buildNineClassBreaks(minVal, maxVal) {
+            let lo = minVal;
+            let hi = maxVal;
+            if (Math.abs(hi - lo) < 0.05) {
+                lo -= 1.0;
+                hi += 1.0;
+            }
+            const step = (hi - lo) / 9.0;
+            const breaks = [];
+            for (let i = 0; i < 9; i++) {
+                breaks.push({
+                    min: lo + i * step,
+                    max: lo + (i + 1) * step
+                });
+            }
+            return breaks;
+        }
+
+        // 4 Graduated Black Pin Size Classes (11px, 15px, 19px, 24px)
+        function buildFourPinSizeClasses(minVal, maxVal) {
+            let lo = minVal;
+            let hi = maxVal;
+            if (Math.abs(hi - lo) < 0.05) { lo -= 1; hi += 1; }
+            const step = (hi - lo) / 4.0;
+            const sizes = [11, 15, 19, 24];
+            return [0, 1, 2, 3].map(i => ({
+                classIdx: i,
+                min: lo + i * step,
+                max: lo + (i + 1) * step,
+                sizePx: sizes[i]
+            }));
+        }
+
+        function getPinSizeForValue(val, pinClasses4) {
+            for (let i = pinClasses4.length - 1; i >= 0; i--) {
+                if (val >= pinClasses4[i].min) return pinClasses4[i].sizePx;
+            }
+            return pinClasses4[0].sizePx;
+        }
+
+        function renderSingleParameterMap(mapKey, legendContainerId, bannerId, paramKey, isCompactBanner = false) {
+            const spec = PARAM_SPECS[paramKey] || PARAM_SPECS.tempMin;
+            const mapObj = maps[mapKey];
+            if (!mapObj) return;
+
+            const bannerEl = document.getElementById(bannerId);
+            if (bannerEl) {
+                if (!isCompactBanner) {
+                    bannerEl.className = `${spec.bannerClass} text-white font-extrabold text-sm md:text-base text-center py-2 px-4 rounded-lg shadow ku-font`;
+                }
+                bannerEl.textContent = currentLang === "ku" ? spec.kuTitle : spec.enTitle;
+            }
+
+            const activeStations = STATIONS.filter(s => s.selected);
+            const validPoints = [];
+            activeStations.forEach(st => {
+                const stStat = stationStatsMap[st.id];
+                if (stStat && stStat[paramKey] !== null && stStat[paramKey] !== undefined && !isNaN(stStat[paramKey])) {
+                    validPoints.push({
+                        id: st.id,
+                        name: st.name,
+                        kuName: st.kuName || st.name,
+                        lat: st.lat,
+                        lon: st.lon,
+                        val: Number(stStat[paramKey])
+                    });
+                }
+            });
+
+            markerLayers[mapKey].clearLayers();
+
+            if (validPoints.length === 0) {
+                idwCanvasLayers[mapKey].setData([], [], spec.ramp, "buffer", 2.3, 0.78);
+                document.getElementById(legendContainerId).innerHTML = `<div class="text-[11px] font-bold text-slate-500">No data for selected stations</div>`;
+                return;
+            }
+
+            const vals = validPoints.map(p => p.val);
+            const minVal = Math.min(...vals);
+            const maxVal = Math.max(...vals);
+
+            const breaks9 = buildNineClassBreaks(minVal, maxVal);
+            const pinClasses4 = buildFourPinSizeClasses(minVal, maxVal);
+
+            const clipMode = document.getElementById("clipModeSelect").value;
+            const power = parseFloat(document.getElementById("idwPowerSelect").value || "2.3");
+            const opacity = parseFloat(document.getElementById("idwOpacitySelect").value || "0.78");
+
+            // 1. Render Smooth IDW Surface
+            idwCanvasLayers[mapKey].setData(validPoints, breaks9, spec.ramp, clipMode, power, opacity);
+
+            // 2. Render Graduated Black Point Symbols & Configurable Station Callout Labels
+            const dispCfg = mapDisplayConfig[mapKey] || { labelMode: 'full', showPins: true };
+
+            validPoints.forEach(p => {
+                const labelName = currentLang === "ku" ? p.kuName : p.name;
+                const displayVal = Number(p.val).toFixed(1).replace(/\.0$/, "");
+                const graduatedPinSize = getPinSizeForValue(p.val, pinClasses4);
+
+                let labelHtml = "";
+                if (dispCfg.labelMode === 'full') {
+                    labelHtml = `<div class="station-map-label ku-font">${labelName} <span style="color:#1d4ed8;">${displayVal}</span></div>`;
+                } else if (dispCfg.labelMode === 'val') {
+                    labelHtml = `<div class="station-map-label font-mono"><span style="color:#1d4ed8;">${displayVal}</span></div>`;
+                }
+
+                const pinSvgHtml = dispCfg.showPins ? getBlackPinSvg(graduatedPinSize) : "";
+
+                if (!labelHtml && !pinSvgHtml) return;
+
+                // Anchor the tip of the black pin (or center of label if pins are off) directly on [lat, lon]
+                const translateY = dispCfg.showPins ? "-100%" : "-50%";
+
+                const iconHtml = `
+                    <div style="display:flex; flex-direction:column; align-items:center; transform:translate(-50%, ${translateY}); pointer-events:none;">
+                        ${labelHtml}
+                        ${pinSvgHtml}
+                    </div>
+                `;
+
+                const divIcon = L.divIcon({
+                    html: iconHtml,
+                    className: "",
+                    iconSize: [0, 0]
+                });
+
+                L.marker([p.lat, p.lon], { icon: divIcon }).addTo(markerLayers[mapKey]);
+            });
+
+            // 3. Render GIS Legend (4 Graduated Black Point Symbols + 9 Color Classes)
+            const pinRowsHtml = pinClasses4.map(c => `
+                <div class="flex items-center gap-2 text-[10px] text-slate-800 leading-tight py-0.5">
+                    <span class="w-5 flex items-center justify-center">${getBlackPinSvg(c.sizePx)}</span>
+                    <span class="font-mono font-bold">${c.min.toFixed(1)} - ${c.max.toFixed(1)}</span>
+                </div>
+            `).join("");
+
+            const colorRowsHtml = breaks9.map((b, idx) => {
+                const rgb = spec.ramp[idx];
+                return `
+                    <div class="flex items-center gap-2 text-[10px] text-slate-800 leading-tight py-[1.5px]">
+                        <span class="w-4 h-2.5 inline-block border border-slate-500/70" style="background:rgb(${rgb[0]},${rgb[1]},${rgb[2]});"></span>
+                        <span class="font-mono font-semibold">${b.min.toFixed(1)} - ${b.max.toFixed(1)}</span>
+                    </div>
+                `;
+            }).join("");
+
+            document.getElementById(legendContainerId).innerHTML = `
+                <div class="font-extrabold text-xs text-slate-900 border-b border-slate-300 pb-0.5 mb-1">Legend</div>
+                <div class="text-[10px] font-bold text-slate-700 mb-0.5">${spec.code}</div>
+                <div class="mb-1.5 space-y-0.5">${pinRowsHtml}</div>
+                <div class="text-[10px] font-bold text-slate-700 mb-0.5">${spec.code}</div>
+                <div>${colorRowsHtml}</div>
+            `;
+        }
+
+        function renderAllActiveMaps() {
+            const layout = document.getElementById("layoutModeSelect").value;
+            const p1 = document.getElementById("map1Param").value;
+            const p2 = document.getElementById("map2Param").value;
+
+            if (layout === "single") {
+                renderSingleParameterMap("map1", "legend-map1", "map1HeaderBanner", p1, false);
+            } else if (layout === "dual") {
+                renderSingleParameterMap("map1", "legend-map1", "map1HeaderBanner", p1, false);
+                renderSingleParameterMap("map2", "legend-map2", "map2HeaderBanner", p2, false);
+            } else if (layout === "quad") {
+                const q1P = document.getElementById("q1ParamSelect")?.value || "tempMin";
+                const q2P = document.getElementById("q2ParamSelect")?.value || "tempMax";
+                const q3P = document.getElementById("q3ParamSelect")?.value || "precipTotal";
+                const q4P = document.getElementById("q4ParamSelect")?.value || "windMaxGust";
+
+                renderSingleParameterMap("mapQ1", "legend-mapQ1", "q1Banner", q1P, true);
+                renderSingleParameterMap("mapQ2", "legend-mapQ2", "q2Banner", q2P, true);
+                renderSingleParameterMap("mapQ3", "legend-mapQ3", "q3Banner", q3P, true);
+                renderSingleParameterMap("mapQ4", "legend-mapQ4", "q4Banner", q4P, true);
+            }
+        }
+
+        function fitMapsToSelectedStations() {
+            const active = STATIONS.filter(s => s.selected);
+            if (active.length === 0) return;
+
+            if (active.length === 1) {
+                Object.values(maps).forEach(m => {
+                    if (m.getSize().x > 0) m.setView([active[0].lat, active[0].lon], 12);
+                });
+                return;
+            }
+
+            const bounds = L.latLngBounds(active.map(s => [s.lat, s.lon])).pad(0.32);
+            Object.values(maps).forEach(m => {
+                if (m.getSize().x > 0) m.fitBounds(bounds);
+            });
+        }
+
+        // ====================================================================
+        // 6. UPDATE EXTREMES SIDEBAR & SUMMARY TABLE (WITH AREAL MEAN PRECIP)
+        // ====================================================================
+        function updateBulletinSidebarAndTable() {
+            const activeStations = STATIONS.filter(s => s.selected);
+            const activeStats = activeStations.map(s => stationStatsMap[s.id]).filter(Boolean);
+
+            document.getElementById("hdrStationCountBadge").textContent = `${activeStats.length} Active Station${activeStats.length === 1 ? '' : 's'}`;
+
+            if (activeStats.length === 0) return;
+
+            const pickLabel = (stObj) => currentLang === "ku" ? (stObj.kuName || stObj.name) : stObj.name;
+
+            let maxT = -Infinity, maxTSt = "--";
+            activeStats.forEach(s => {
+                if (s.tempMax !== null && s.tempMax > maxT) { maxT = s.tempMax; maxTSt = pickLabel(s); }
+            });
+            document.getElementById("extHighTempVal").textContent = maxT > -Infinity ? `${maxT.toFixed(1)}°C` : "-- °C";
+            document.getElementById("extHighTempSt").textContent = maxTSt;
+
+            let minT = Infinity, minTSt = "--";
+            activeStats.forEach(s => {
+                if (s.tempMin !== null && s.tempMin < minT) { minT = s.tempMin; minTSt = pickLabel(s); }
+            });
+            document.getElementById("extLowTempVal").textContent = minT < Infinity ? `${minT.toFixed(1)}°C` : "-- °C";
+            document.getElementById("extLowTempSt").textContent = minTSt;
+
+            let maxW = -Infinity, maxWSt = "--";
+            activeStats.forEach(s => {
+                const w = s.windMaxGust ?? s.windAvg;
+                if (w !== null && w > maxW) { maxW = w; maxWSt = pickLabel(s); }
+            });
+            document.getElementById("extHighWindVal").textContent = maxW > -Infinity ? `${maxW.toFixed(1)} km/h` : "-- km/h";
+            document.getElementById("extHighWindSt").textContent = maxWSt;
+
+            let maxH = -Infinity;
+            activeStats.forEach(s => {
+                const h = s.humMax ?? s.humAvg;
+                if (h !== null && h > maxH) maxH = h;
+            });
+            const topHumStations = activeStats.filter(s => Math.abs((s.humMax ?? s.humAvg ?? -999) - maxH) < 0.5).slice(0, 3);
+            const humListEl = document.getElementById("extHighHumList");
+            if (maxH > -Infinity && topHumStations.length > 0) {
+                humListEl.innerHTML = topHumStations.map(s => `
+                    <div class="flex justify-between items-center">
+                        <span class="font-sans text-purple-700 font-extrabold">${maxH.toFixed(0)}%</span>
+                        <span>${pickLabel(s)}</span>
+                    </div>
+                `).join("");
+            } else {
+                humListEl.innerHTML = `<div class="flex justify-between"><span>--%</span><span>--</span></div>`;
+            }
+
+            let maxRain = -Infinity, maxRainSt = "--";
+            let sumPrecip = 0;
+            activeStats.forEach(s => {
+                const r = s.precipTotal || 0;
+                sumPrecip += r;
+                if (r > maxRain) { maxRain = r; maxRainSt = pickLabel(s); }
+            });
+            const arealMeanRain = sumPrecip / activeStats.length;
+
+            document.getElementById("extHighRainVal").textContent = maxRain > -Infinity ? `${maxRain.toFixed(1)} mm` : "0.0 mm";
+            document.getElementById("extHighRainSt").textContent = maxRainSt;
+            document.getElementById("extArealRainVal").textContent = `Areal Mean: ${arealMeanRain.toFixed(2)} mm`;
+            document.getElementById("extActiveStCount").textContent = `(÷ ${activeStats.length} Stns)`;
+
+            document.getElementById("tableArealSummaryText").textContent =
+                `Areal Mean Precipitation (${activeStats.length} Stations): ${arealMeanRain.toFixed(2)} mm | Combined Raw Sum: ${sumPrecip.toFixed(2)} mm`;
+
+            const tbody = document.getElementById("stationSummaryTableBody");
+            tbody.innerHTML = "";
+            activeStats.forEach(s => {
+                const tr = document.createElement("tr");
+                tr.className = "hover:bg-slate-100";
+                tr.innerHTML = `
+                    <td class="p-2 font-bold">${s.name}</td>
+                    <td class="p-2 font-bold ku-font">${s.kuName}</td>
+                    <td class="p-2 font-mono text-blue-700">${s.stationId}</td>
+                    <td class="p-2 font-mono text-[11px]">${s.lat.toFixed(3)}°N, ${s.lon.toFixed(3)}°E</td>
+                    <td class="p-2 font-extrabold text-sky-700">${s.tempMin ?? '--'}°C</td>
+                    <td class="p-2 font-bold">${s.tempAvg ?? '--'}°C</td>
+                    <td class="p-2 font-extrabold text-rose-600">${s.tempMax ?? '--'}°C</td>
+                    <td class="p-2 font-extrabold text-blue-700">${s.precipTotal.toFixed(2)} mm</td>
+                    <td class="p-2">${s.humAvg ?? '--'}% / ${s.humMax ?? '--'}%</td>
+                    <td class="p-2 font-semibold text-emerald-700">${s.windAvg ?? '--'} / ${s.windMaxGust ?? '--'} km/h</td>
+                    <td class="p-2">${s.pressAvg ?? '--'} hPa</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // ====================================================================
+        // 7. LANGUAGE, LAYOUT & STATION CHECKLIST CONTROLLERS
+        // ====================================================================
+        function setLanguage(lang) {
+            currentLang = lang;
+            document.getElementById("lang-ku").className = lang === "ku"
+                ? "px-2.5 py-1 rounded text-xs font-bold bg-blue-600 text-white transition"
+                : "px-2.5 py-1 rounded text-xs font-bold text-slate-300 hover:text-white transition";
+            document.getElementById("lang-en").className = lang === "en"
+                ? "px-2.5 py-1 rounded text-xs font-bold bg-blue-600 text-white transition"
+                : "px-2.5 py-1 rounded text-xs font-bold text-slate-300 hover:text-white transition";
+
+            if (lang === "ku") {
+                document.getElementById("hdrLine1").textContent = "زانکۆی سلێمانی • کۆلێژی زانست";
+                document.getElementById("hdrLine2").textContent = "بەشی زانستەکانی زەوی و نەوت — سەنتەری کەشناسی";
+                document.getElementById("hdrLine3").textContent = "بڵاوکراوەی نەخشەی کەشناسی و شیکاری فەزایی (GIS Spatial Bulletin)";
+                document.getElementById("sidebarHeaderTitle").textContent = "ڕەگەزەکانى ئاووهەوا";
+                document.getElementById("lblExtHighTemp").textContent = "بەرزترین پلەی گەرمی تۆمارکراو";
+                document.getElementById("lblExtLowTemp").textContent = "نزمترین پلەی گەرمی تۆمارکراو";
+                document.getElementById("lblExtHighWind").textContent = "بەرزترین خێرایی با";
+                document.getElementById("lblExtHighHum").textContent = "بەرزترین ڕێژەی شێداری هەوا";
+                document.getElementById("lblExtHighRain").textContent = "بەرزترین ڕێژەی باران بارین";
+            } else {
+                document.getElementById("hdrLine1").textContent = "UNIVERSITY OF SULAIMANI • COLLEGE OF SCIENCE";
+                document.getElementById("hdrLine2").textContent = "Department of Earth Sciences & Petroleum — Meteorological Center";
+                document.getElementById("hdrLine3").textContent = "Spatial Hydro-Meteorological Iso-Map Bulletin";
+                document.getElementById("sidebarHeaderTitle").textContent = "CLIMATIC EXTREMES SUMMARY";
+                document.getElementById("lblExtHighTemp").textContent = "Highest Recorded Temperature";
+                document.getElementById("lblExtLowTemp").textContent = "Lowest Recorded Temperature";
+                document.getElementById("lblExtHighWind").textContent = "Maximum Wind Speed / Gust";
+                document.getElementById("lblExtHighHum").textContent = "Highest Relative Humidity";
+                document.getElementById("lblExtHighRain").textContent = "Highest Station Precipitation";
+            }
+
+            updateBulletinSidebarAndTable();
+            renderAllActiveMaps();
+        }
+
+        function onLayoutModeChange() {
+            const mode = document.getElementById("layoutModeSelect").value;
+            const dualBox = document.getElementById("dualMapContainer");
+            const quadBox = document.getElementById("quadMapContainer");
+            const map2Wrap = document.getElementById("map2Wrapper");
+            const map2Sel = document.getElementById("map2SelectorBox");
+
+            if (mode === "single") {
+                quadBox.classList.add("hidden");
+                dualBox.classList.remove("hidden");
+                dualBox.className = "grid grid-cols-1 gap-5";
+                map2Wrap.classList.add("hidden");
+                map2Sel.classList.add("opacity-40", "pointer-events-none");
+            } else if (mode === "dual") {
+                quadBox.classList.add("hidden");
+                dualBox.classList.remove("hidden");
+                dualBox.className = "grid grid-cols-1 md:grid-cols-2 gap-5";
+                map2Wrap.classList.remove("hidden");
+                map2Sel.classList.remove("opacity-40", "pointer-events-none");
+            } else if (mode === "quad") {
+                dualBox.classList.add("hidden");
+                quadBox.classList.remove("hidden");
+            }
+
+            setTimeout(() => {
+                Object.keys(maps).forEach(k => {
+                    maps[k].invalidateSize(true);
+                });
+                fitMapsToSelectedStations();
+                setTimeout(() => {
+                    refreshAllMapsSizeAndTiles();
+                }, 120);
+            }, 60);
+        }
+
+        function renderStationChecklistBar() {
+            const bar = document.getElementById("stationChecklistBar");
+            bar.innerHTML = "";
+            STATIONS.forEach((st, idx) => {
+                const lbl = document.createElement("label");
+                lbl.className = `inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-bold cursor-pointer border transition ${
+                    st.selected
+                        ? 'bg-blue-600/25 border-blue-400 text-white'
+                        : 'bg-slate-800 border-slate-700 text-slate-400'
+                }`;
+                lbl.innerHTML = `
+                    <input type="checkbox" ${st.selected ? 'checked' : ''} onchange="toggleSingleStation(${idx}, this.checked)" class="rounded text-blue-500">
+                    <span>${st.name}</span>
+                    <span class="text-[10px] text-amber-300 ku-font">(${st.kuName || st.id})</span>
+                `;
+                bar.appendChild(lbl);
+            });
+            renderModalStationList();
+        }
+
+        function toggleSingleStation(idx, state) {
+            STATIONS[idx].selected = state;
+            saveStationsToStorage();
+            renderStationChecklistBar();
+            updateBulletinSidebarAndTable();
+            renderAllActiveMaps();
+        }
+
+        function toggleAllStations(state) {
+            STATIONS.forEach(s => s.selected = state);
+            saveStationsToStorage();
+            renderStationChecklistBar();
+            updateBulletinSidebarAndTable();
+            renderAllActiveMaps();
+        }
+
+        function toggleStationManager() {
+            const modal = document.getElementById("stationModal");
+            modal.classList.toggle("hidden");
+            renderModalStationList();
+            if (!modal.classList.contains("hidden") && discoveredStationsPool.length === 0) {
+                scanNearbyWuStations();
+            }
+        }
+
+        function renderModalStationList() {
+            const container = document.getElementById("modalStationList");
+            const countLbl = document.getElementById("savedStationCountLbl");
+            if (countLbl) countLbl.textContent = STATIONS.length;
+            if (!container) return;
+            container.innerHTML = "";
+            STATIONS.forEach((st, idx) => {
+                const dist = calcDistanceKm(SULAIMANI_CENTER.lat, SULAIMANI_CENTER.lon, st.lat, st.lon).toFixed(1);
+                const row = document.createElement("div");
+                row.className = "flex justify-between items-center bg-slate-100 px-3 py-2 rounded-lg text-xs border border-slate-200";
+                row.innerHTML = `
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="font-bold text-slate-900">${st.name}</span>
+                        <span class="font-bold text-blue-700 ku-font">(${st.kuName || st.name})</span>
+                        <span class="font-mono font-bold text-indigo-600">[${st.id}]</span>
+                        <span class="font-mono text-slate-500">${st.lat.toFixed(4)}°N, ${st.lon.toFixed(4)}°E</span>
+                        <span class="px-2 py-0.5 rounded bg-slate-200 text-slate-700 text-[10px] font-bold">${dist} km from Suli</span>
+                    </div>
+                    ${STATIONS.length > 1 ? `<button onclick="removeStation(${idx})" class="text-rose-600 hover:text-rose-500 px-2"><i class="fa-solid fa-trash"></i></button>` : ''}
+                `;
+                container.appendChild(row);
+            });
+        }
+
+        function addNewStation() {
+            const name = document.getElementById("newStName").value.trim();
+            const kuName = document.getElementById("newStKuName").value.trim() || guessKurdishName(name, "");
+            const id = document.getElementById("newStId").value.trim().toUpperCase();
+            const lat = parseFloat(document.getElementById("newStLat").value);
+            const lon = parseFloat(document.getElementById("newStLon").value);
+
+            if (!name || !id || isNaN(lat) || isNaN(lon)) {
+                alert("Please enter Station Name, WU ID, Latitude, and Longitude.");
+                return;
+            }
+
+            if (!STATIONS.some(s => s.id === id)) {
+                STATIONS.push({ id, name, kuName, lat, lon, color: "#3b82f6", selected: true });
+                saveStationsToStorage();
+            }
+            document.getElementById("newStName").value = "";
+            document.getElementById("newStKuName").value = "";
+            document.getElementById("newStId").value = "";
+            renderStationChecklistBar();
+            renderDiscoveredStationsTable();
+            fetchAndRenderMaps();
+        }
+
+        function removeStation(idx) {
+            STATIONS.splice(idx, 1);
+            saveStationsToStorage();
+            renderStationChecklistBar();
+            renderDiscoveredStationsTable();
+            updateBulletinSidebarAndTable();
+            renderAllActiveMaps();
+        }
+
+        function resetDefaultStations() {
+            STATIONS = [...DEFAULT_STATIONS];
+            saveStationsToStorage();
+            renderStationChecklistBar();
+            renderDiscoveredStationsTable();
+            fetchAndRenderMaps();
+        }
+
+        // ====================================================================
+        // 8. FETCH ALL STATIONS FOR SELECTED DATE RANGE & RENDER
+        // ====================================================================
+        function setQuickRange(daysBack) {
+            const end = new Date();
+            const start = new Date();
+            start.setDate(end.getDate() - daysBack);
+            document.getElementById("endDate").value = toLocalYMD(end);
+            document.getElementById("startDate").value = toLocalYMD(start);
+            fetchAndRenderMaps();
+        }
+
+        async function fetchAndRenderMaps() {
+            const startVal = document.getElementById("startDate").value;
+            const endVal = document.getElementById("endDate").value;
+            const statusEl = document.getElementById("fetchStatusText");
+
+            document.getElementById("hdrDateRangeBanner").textContent = `Period: ${startVal}  →  ${endVal}`;
+            statusEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-amber-400"></i> Fetching ${STATIONS.length} Stations...`;
+
+            stationStatsMap = {};
+            for (let i = 0; i < STATIONS.length; i++) {
+                const st = STATIONS[i];
+                statusEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-amber-400"></i> Fetching ${st.name} (${i + 1}/${STATIONS.length})...`;
+                const summary = await fetchStationSummaryForRange(st, startVal, endVal);
+                if (summary) {
+                    stationStatsMap[st.id] = summary;
+                }
+            }
+
+            const loadedCount = Object.keys(stationStatsMap).length;
+            statusEl.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span> Loaded ${loadedCount}/${STATIONS.length} Stations`;
+
+            updateBulletinSidebarAndTable();
+            fitMapsToSelectedStations();
+            refreshAllMapsSizeAndTiles();
+        }
+
+        // ====================================================================
+        // 9. EXPORT FULL BULLETIN POSTER AS HIGH-RES PNG OR PDF
+        // ====================================================================
+        async function exportBulletinPoster(format) {
+            const statusEl = document.getElementById("fetchStatusText");
+            const oldHtml = statusEl.innerHTML;
+            statusEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-amber-400"></i> Rendering High-Res Poster...`;
+
+            // Temporarily hide the in-map floating toggle buttons during poster export so the final image is clean
+            document.querySelectorAll(".map-overlay-controls").forEach(el => el.style.display = "none");
+
+            try {
+                const posterEl = document.getElementById("bulletinExportArea");
+                const canvas = await html2canvas(posterEl, {
+                    scale: 2,
+                    useCORS: true,
+                    allowTaint: true,
+                    backgroundColor: "#ffffff"
+                });
+
+                const startVal = document.getElementById("startDate").value;
+                const endVal = document.getElementById("endDate").value;
+                const imgUrl = canvas.toDataURL("image/png", 1.0);
+
+                if (format === "png") {
+                    const a = document.createElement("a");
+                    a.href = imgUrl;
+                    a.download = `UOS_Spatial_Bulletin_${startVal}_to_${endVal}.png`;
+                    a.click();
+                } else {
+                    const { jsPDF } = window.jspdf;
+                    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+                    const pageW = doc.internal.pageSize.getWidth();
+                    const pageH = doc.internal.pageSize.getHeight();
+                    const ratio = Math.min((pageW - 12) / canvas.width, (pageH - 12) / canvas.height);
+                    const w = canvas.width * ratio;
+                    const h = canvas.height * ratio;
+                    doc.addImage(imgUrl, "PNG", (pageW - w) / 2, (pageH - h) / 2, w, h);
+                    doc.save(`UOS_Spatial_Bulletin_${startVal}_to_${endVal}.pdf`);
+                }
+            } finally {
+                document.querySelectorAll(".map-overlay-controls").forEach(el => el.style.display = "flex");
+                statusEl.innerHTML = oldHtml;
+            }
+        }
+
+        // ====================================================================
+        // INITIALIZE ON PAGE LOAD
+        // ====================================================================
+        window.addEventListener("DOMContentLoaded", () => {
+            if (customWuKey) {
+                document.getElementById("customApiKeyInput").value = customWuKey;
+            }
+
+            createMapInstance("map1", "map1Canvas");
+            createMapInstance("map2", "map2Canvas");
+            createMapInstance("mapQ1", "mapQ1Canvas");
+            createMapInstance("mapQ2", "mapQ2Canvas");
+            createMapInstance("mapQ3", "mapQ3Canvas");
+            createMapInstance("mapQ4", "mapQ4Canvas");
+
+            syncMapGroup("map1", ["map2"]);
+            syncMapGroup("map2", ["map1"]);
+            syncMapGroup("mapQ1", ["mapQ2", "mapQ3", "mapQ4"]);
+            syncMapGroup("mapQ2", ["mapQ1", "mapQ3", "mapQ4"]);
+            syncMapGroup("mapQ3", ["mapQ1", "mapQ2", "mapQ4"]);
+            syncMapGroup("mapQ4", ["mapQ1", "mapQ2", "mapQ3"]);
+
+            renderStationChecklistBar();
+            renderDiscoveredStationsTable();
+            setQuickRange(30);
+        });
+    </script>
+</body>
+</html>
